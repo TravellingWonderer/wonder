@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.wonder.provider.AppContainer
 import com.wonder.provider.data.TripRepository
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Spacer
@@ -133,6 +134,12 @@ fun ConversationScreen(
         if (granted) viewModel.startListening() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
     }
 
+    LaunchedEffect(Unit) {
+        if (AppContainer.consumeVoiceOnConversationOpen()) {
+            listen()
+        }
+    }
+
     val actions = remember(state.mode) {
         CardActions(
             onOpenPlan = { onOpenPlan(null, null) },
@@ -143,7 +150,8 @@ fun ConversationScreen(
             onOpenAddToTrip = viewModel::openAddToTripSheet,
             onAcceptDraft = viewModel::acceptDraft,
             onOpenDay = { date -> onOpenPlan(date, null) },
-            onAddFlightOffer = viewModel::addFlightOffer
+            onAddFlightOffer = viewModel::addFlightOffer,
+            onConfirmDates = viewModel::confirmTripDates
         )
     }
 

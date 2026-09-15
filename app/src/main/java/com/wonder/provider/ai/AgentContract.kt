@@ -74,6 +74,17 @@ class AgentPrompt(
         } else {
             ""
         }
+        val datesBlock = if (!repository.trip.value.datesConfirmed) {
+            """
+            DATES NOT CONFIRMED
+            This trip has no locked date range yet. Do NOT emit add_item / update_item actions
+            that place legs on the itinerary. Ask them to pick an approximate range first.
+            The app will show a date picker card — keep your spoken reply short and invite them
+            to choose dates there.
+            """.trimIndent()
+        } else {
+            ""
+        }
         return """
             You are Wonder — a travel companion that a small group of friends talks to instead of
             tapping through an app. You are speaking to one of the travellers listed below, about
@@ -92,6 +103,7 @@ class AgentPrompt(
             thread, remember what was already decided or shown, and do not contradict it.
             $checkpointBlock
             ${if (welcomeBlock.isNotBlank()) "\n$welcomeBlock\n" else ""}
+            ${if (datesBlock.isNotBlank()) "\n$datesBlock\n" else ""}
             HOW TO SPEAK
             - Warm, brief, specific. One or two sentences is usually right; three is the maximum.
             - Lead with the answer, then at most one useful observation.
@@ -185,7 +197,17 @@ class AgentPrompt(
         val dateFormat = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 
         appendLine("TRIP: ${trip.title} — ${trip.destination}")
-        appendLine("Dates: ${trip.startDate.format(dateFormat)} to ${trip.endDate.format(dateFormat)} (${trip.dayCount} days)")
+        if (!trip.datesConfirmed) {
+            appendLine(
+                "DATES: not confirmed yet (placeholder ${trip.startDate.format(dateFormat)} to " +
+                    "${trip.endDate.format(dateFormat)}). Do not add itinerary legs until dates are locked."
+            )
+        } else {
+            appendLine(
+                "Dates: ${trip.startDate.format(dateFormat)} to ${trip.endDate.format(dateFormat)} " +
+                    "(${trip.dayCount} days)"
+            )
+        }
         appendLine("Travelling: ${trip.travellers.joinToString(", ") { it.name }}")
         appendLine("Into: ${trip.interests.joinToString(", ") { it.label }}")
         appendLine(

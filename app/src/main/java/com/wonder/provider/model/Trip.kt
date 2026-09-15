@@ -82,7 +82,12 @@ data class Trip(
     /** One unit of [currency] in [homeCurrency]. */
     val homeRate: Double,
     val coverEmoji: String,
-    val interests: Set<TourInterest> = emptySet()
+    val interests: Set<TourInterest> = emptySet(),
+    /**
+     * False when the trip was created without a real date plan (e.g. "cheapest days").
+     * Itinerary legs must wait until the traveller confirms a range.
+     */
+    val datesConfirmed: Boolean = true
 ) {
     val dates: List<LocalDate>
         get() = generateSequence(startDate) { it.plusDays(1) }

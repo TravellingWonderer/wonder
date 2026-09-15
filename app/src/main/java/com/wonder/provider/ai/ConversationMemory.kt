@@ -183,6 +183,7 @@ class TravelSessionSummarizer {
         is AgentCard.DraftDay -> "draft day in ${card.tour.city}"
         is AgentCard.Doorway -> card.headline
         is AgentCard.FlightResults -> "live flights ${card.result.query.origin}-${card.result.query.destination}"
+        is AgentCard.ConfirmDates -> "date picker"
     }
 
     private fun extractTopics(turns: List<ChatTurn>): List<String> {

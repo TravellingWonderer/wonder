@@ -28,7 +28,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -57,8 +56,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.wonder.provider.data.NearbyLocationStatus
 import com.wonder.provider.AppContainer
+import com.wonder.provider.data.NearbyLocationStatus
 import com.wonder.provider.data.TripRepository
 import com.wonder.provider.model.ExploreFeed
 import com.wonder.provider.model.ExplorePlacePick
@@ -66,7 +65,6 @@ import com.wonder.provider.model.ExploreFeedKind
 import com.wonder.provider.model.FoodFavorite
 import com.wonder.provider.model.LocalGuide
 import com.wonder.provider.model.LocalTake
-import com.wonder.provider.model.NewTripBlueprint
 import com.wonder.provider.model.SmallTripIdea
 import com.wonder.provider.model.TripArchiveStatus
 import com.wonder.provider.model.TripIdea
@@ -88,7 +86,8 @@ fun ExploreScreen(
     onOpenTrip: () -> Unit,
     onOpenTripOverview: (String) -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenPersonas: () -> Unit
+    onOpenPersonas: () -> Unit,
+    onOpenNewTrip: () -> Unit
 ) {
     val explore = AppContainer.explore
     val trips = AppContainer.trips
@@ -102,7 +101,6 @@ fun ExploreScreen(
     var showArchived by remember { mutableStateOf(false) }
     var creatingTrip by remember { mutableStateOf(false) }
     var tripToDelete by remember { mutableStateOf<TripSummary?>(null) }
-    var showNewTripDialog by remember { mutableStateOf(false) }
     var directionsPick by remember { mutableStateOf<ExplorePlacePick?>(null) }
     val hasActiveTrip = catalog.any { it.isActive }
     val nearbyExplore = AppContainer.nearbyExplore
@@ -110,10 +108,22 @@ fun ExploreScreen(
     val nearbyPlace by nearbyExplore.placeLabel.collectAsStateWithLifecycle()
     val nearbyRefreshing by nearbyExplore.isRefreshing.collectAsStateWithLifecycle()
     val nearbyStatus by nearbyExplore.status.collectAsStateWithLifecycle()
-    val isNearbyMode = catalog.isEmpty()
-    val displayFeed = if (hasActiveTrip) feed else nearbyFeed
-    val displayRefreshing = if (hasActiveTrip) refreshing else nearbyRefreshing
+    var browsingNearby by remember { mutableStateOf(!hasActiveTrip) }
+    val isNearbyMode = browsingNearby || !hasActiveTrip
+    val tripNeedsCity = hasActiveTrip && !isNearbyMode &&
+        !TripRepository.hasDecidedDestination(trip.destination)
+    val displayFeed = when {
+        isNearbyMode -> nearbyFeed
+        tripNeedsCity -> null
+        hasActiveTrip -> feed
+        else -> null
+    }
+    val displayRefreshing = if (isNearbyMode) nearbyRefreshing else refreshing
     val feedFreshToday = displayFeed?.isFreshFor() == true
+
+    LaunchedEffect(hasActiveTrip) {
+        if (!hasActiveTrip) browsingNearby = true
+    }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -127,22 +137,28 @@ fun ExploreScreen(
         }
     }
 
-    LaunchedEffect(hasActiveTrip, trip.id) {
-        if (hasActiveTrip) explore.ensureFeed(force = false)
+    fun activateNearby(forceRefresh: Boolean = true) {
+        browsingNearby = true
+        if (nearbyExplore.hasLocationPermission()) {
+            if (forceRefresh) nearbyExplore.refresh()
+            else scope.launch { nearbyExplore.ensureFeed(force = false) }
+        } else {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
+
+    LaunchedEffect(hasActiveTrip, trip.id, browsingNearby) {
+        if (hasActiveTrip && !browsingNearby) explore.ensureFeed(force = false)
     }
 
     LaunchedEffect(isNearbyMode) {
         if (isNearbyMode) {
-            if (nearbyExplore.hasLocationPermission()) {
-                nearbyExplore.ensureFeed(force = false)
-            } else {
-                locationPermissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    )
-                )
-            }
+            activateNearby(forceRefresh = false)
         }
     }
 
@@ -158,39 +174,10 @@ fun ExploreScreen(
         }
     }
 
-    fun startBlankTrip(blueprint: NewTripBlueprint) {
-        if (creatingTrip || !TripRepository.isValidTripTitle(blueprint.title)) return
-        creatingTrip = true
-        scope.launch {
-            try {
-                val (start, end) = blueprint.dateRange
-                trips.createBlankTrip(
-                    title = blueprint.title,
-                    destination = TripRepository.DEFAULT_DESTINATION,
-                    startDate = start,
-                    endDate = end,
-                    vibes = blueprint.effectiveVibes
-                )
-                showNewTripDialog = false
-            } finally {
-                creatingTrip = false
-            }
-        }
-    }
-
     fun deleteTrip(summary: TripSummary) {
         AppContainer.wonderAgent.clearSession(summary.id)
         trips.deleteTripAsync(summary.id)
         tripToDelete = null
-    }
-
-    if (showNewTripDialog) {
-        NewTripDialog(
-            creating = creatingTrip,
-            dismissible = true,
-            onDismiss = { showNewTripDialog = false },
-            onCreate = { startBlankTrip(it) }
-        )
     }
 
     directionsPick?.let { pick ->
@@ -242,37 +229,45 @@ fun ExploreScreen(
                 item(key = "header") {
                     ExploreHeader(
                         tripTitle = when {
-                            hasActiveTrip -> trip.title
                             isNearbyMode -> "Explore nearby"
+                            hasActiveTrip -> trip.title
                             else -> "No trip yet"
                         },
                         destination = when {
-                            hasActiveTrip -> trip.destination
                             isNearbyMode -> nearbyPlace ?: "Finding your location…"
+                            hasActiveTrip -> trip.destination
                             else -> "Create one to get started"
                         },
                         coverEmoji = when {
-                            hasActiveTrip -> trip.coverEmoji
                             isNearbyMode -> "📍"
+                            hasActiveTrip -> trip.coverEmoji
                             else -> "✈️"
                         },
                         gatheredLabel = displayFeed?.gatheredLabel().orEmpty(),
                         sourceLabel = displayFeed?.sourceLabel.orEmpty(),
                         refreshing = displayRefreshing,
-                        refreshEnabled = !displayRefreshing && (hasActiveTrip && !feedFreshToday || isNearbyMode),
+                        refreshEnabled = !displayRefreshing && (
+                            (isNearbyMode && !feedFreshToday) ||
+                                (!isNearbyMode && hasActiveTrip && !tripNeedsCity && !feedFreshToday)
+                        ),
                         onRefresh = {
-                            if (hasActiveTrip && !feedFreshToday) explore.refresh()
-                            else if (isNearbyMode) nearbyExplore.refresh()
+                            if (isNearbyMode) nearbyExplore.refresh()
+                            else if (hasActiveTrip && !tripNeedsCity && !feedFreshToday) explore.refresh()
                         },
                         heroSubtitle = when {
+                            isNearbyMode -> "Ideas near you · from your GPS"
+                            hasActiveTrip && tripNeedsCity -> "Pick a city to unlock ideas"
                             hasActiveTrip -> "Your trip · talk to Wonder"
-                            isNearbyMode -> "No trip yet · tap to plan one"
                             else -> "Your trip · talk to Wonder"
                         },
                         onHeroClick = {
-                            if (hasActiveTrip) onOpenTrip() else showNewTripDialog = true
+                            when {
+                                isNearbyMode -> activateNearby(forceRefresh = true)
+                                hasActiveTrip -> onOpenTrip()
+                                else -> onOpenNewTrip()
+                            }
                         },
-                        showChatIcon = hasActiveTrip,
+                        showChatIcon = hasActiveTrip && !isNearbyMode,
                         onOpenSettings = onOpenSettings,
                         onOpenPersonas = onOpenPersonas
                     )
@@ -293,18 +288,12 @@ fun ExploreScreen(
                     }
                 }
 
-                if (isNearbyMode) {
-                    item(key = "new-trip-nudge") {
-                        NewTripNudge(onCreateTrip = { showNewTripDialog = true })
-                    }
-                }
-
-                if (planned.isNotEmpty() || creatingTrip || (!hasActiveTrip && !isNearbyMode)) {
+                if (planned.isNotEmpty() || creatingTrip || !hasActiveTrip || isNearbyMode) {
                     item(key = "your-trips-label") {
                         SectionHeader(
                             title = "Your trips",
                             subtitle = if (hasActiveTrip) {
-                                "Tap a trip for the map and timeline — use it from there"
+                                "Tap a trip for the map — or Explore nearby for local ideas"
                             } else {
                                 "Name a trip to start planning"
                             }
@@ -317,23 +306,43 @@ fun ExploreScreen(
                                 .padding(horizontal = 18.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            ExploreNearbyChip(
+                                selected = isNearbyMode,
+                                loading = isNearbyMode && nearbyRefreshing,
+                                placeLabel = nearbyPlace,
+                                onClick = { activateNearby(forceRefresh = true) }
+                            )
                             planned.forEach { summary ->
                                 TripPickerChip(
                                     summary = summary,
-                                    onClick = { onOpenTripOverview(summary.id) },
+                                    selected = !isNearbyMode && summary.isActive,
+                                    onClick = {
+                                        browsingNearby = false
+                                        if (!summary.isActive) {
+                                            trips.switchActiveTripAsync(summary.id)
+                                        }
+                                        onOpenTripOverview(summary.id)
+                                    },
                                     onDelete = { tripToDelete = summary }
                                 )
                             }
                             NewTripChip(
                                 loading = creatingTrip,
-                                onClick = { showNewTripDialog = true }
+                                onClick = onOpenNewTrip
                             )
                         }
                     }
                 }
 
                 if (hasActiveTrip || isNearbyMode) {
-                if (displayFeed == null && displayRefreshing) {
+                if (tripNeedsCity) {
+                    item(key = "needs-city") {
+                        NeedsCityPrompt(
+                            onOpenTrip = onOpenTrip,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+                        )
+                    }
+                } else if (displayFeed == null && displayRefreshing) {
                     item(key = "feed-loading") {
                         Column(
                             modifier = Modifier
@@ -679,15 +688,43 @@ private fun ExploreHeader(
                     tint = Color.White.copy(alpha = 0.9f),
                     modifier = Modifier.size(20.dp)
                 )
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = "New trip",
-                    tint = Color.White.copy(alpha = 0.9f),
-                    modifier = Modifier.size(20.dp)
-                )
             }
         }
+    }
+}
+
+@Composable
+private fun NeedsCityPrompt(
+    onOpenTrip: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = WonderColors.current
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(palette.cardTint)
+            .border(1.dp, palette.hairline, RoundedCornerShape(22.dp))
+            .clickable(onClick = onOpenTrip)
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Trip ideas",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = "Fill up at least one city inside the trip to generate ideas.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = "Ask Wonder to set a destination — then picks will show up here.",
+            style = MaterialTheme.typography.labelMedium,
+            color = palette.aurora[0]
+        )
     }
 }
 
@@ -720,42 +757,6 @@ private fun LocationPermissionNudge(onRequestPermission: () -> Unit) {
             )
             Text(
                 text = "Wonder uses GPS to show food, things to do, and ideas near you",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun NewTripNudge(onCreateTrip: () -> Unit) {
-    val palette = WonderColors.current
-    Row(
-        modifier = Modifier
-            .padding(horizontal = 18.dp, vertical = 4.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(palette.cardTint)
-            .border(1.dp, palette.hairline, RoundedCornerShape(16.dp))
-            .clickable(onClick = onCreateTrip)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Add,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp)
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "Plan a trip when you're ready",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = "Optional — browse nearby picks first",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -802,9 +803,13 @@ private fun ExploreCard(
 }
 
 @Composable
-private fun TripPickerChip(summary: TripSummary, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun TripPickerChip(
+    summary: TripSummary,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
     val palette = WonderColors.current
-    val active = summary.isActive
     Box(
         modifier = Modifier.width(132.dp)
     ) {
@@ -812,10 +817,23 @@ private fun TripPickerChip(summary: TripSummary, onClick: () -> Unit, onDelete: 
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(if (active) palette.cardTint else MaterialTheme.colorScheme.surface)
+                .background(
+                    if (selected) {
+                        Brush.linearGradient(
+                            listOf(
+                                palette.aurora[0].copy(alpha = 0.18f),
+                                palette.aurora[1].copy(alpha = 0.10f)
+                            )
+                        )
+                    } else {
+                        Brush.linearGradient(
+                            listOf(palette.cardTint, palette.cardTint)
+                        )
+                    }
+                )
                 .border(
-                    width = if (active) 1.5.dp else 1.dp,
-                    color = if (active) MaterialTheme.colorScheme.primary else palette.hairline,
+                    width = if (selected) 1.5.dp else 1.dp,
+                    color = if (selected) palette.aurora[0] else palette.hairline,
                     shape = RoundedCornerShape(16.dp)
                 )
                 .clickable(onClick = onClick)
@@ -828,7 +846,7 @@ private fun TripPickerChip(summary: TripSummary, onClick: () -> Unit, onDelete: 
                 text = summary.title,
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = 2
             )
             Text(
@@ -853,6 +871,68 @@ private fun TripPickerChip(summary: TripSummary, onClick: () -> Unit, onDelete: 
 }
 
 @Composable
+private fun ExploreNearbyChip(
+    selected: Boolean,
+    loading: Boolean,
+    placeLabel: String?,
+    onClick: () -> Unit
+) {
+    val palette = WonderColors.current
+    Column(
+        modifier = Modifier
+            .width(132.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .then(
+                if (selected) {
+                    Modifier
+                        .background(Brush.linearGradient(palette.aurora))
+                        .border(1.5.dp, Color.Transparent, RoundedCornerShape(16.dp))
+                } else {
+                    Modifier
+                        .background(palette.cardTint)
+                        .border(1.dp, palette.hairline, RoundedCornerShape(16.dp))
+                }
+            )
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.dp,
+                color = if (selected) Color.White else MaterialTheme.colorScheme.primary
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Outlined.LocationOn,
+                contentDescription = null,
+                tint = if (selected) Color.White else palette.aurora[0],
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Text(
+            text = "Explore nearby",
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 2
+        )
+        Text(
+            text = when {
+                loading -> "Locating…"
+                !placeLabel.isNullOrBlank() -> placeLabel
+                else -> "Use GPS"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) Color.White.copy(alpha = 0.88f)
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
 private fun NewTripChip(loading: Boolean, onClick: () -> Unit) {
     val palette = WonderColors.current
     Column(
@@ -862,23 +942,23 @@ private fun NewTripChip(loading: Boolean, onClick: () -> Unit) {
             .border(1.dp, palette.hairline, RoundedCornerShape(16.dp))
             .clickable(enabled = !loading, onClick = onClick)
             .padding(12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         if (loading) {
             CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
         } else {
-            Icon(
-                imageVector = Icons.Filled.Add,
-                contentDescription = "New trip",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(28.dp)
-            )
             Text(
                 text = "New trip",
-                modifier = Modifier.padding(top = 6.dp),
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2
+            )
+            Text(
+                text = "Start planning",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
             )
         }
     }

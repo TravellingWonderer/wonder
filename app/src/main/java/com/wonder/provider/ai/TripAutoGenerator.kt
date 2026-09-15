@@ -26,6 +26,7 @@ class TripAutoGenerator(
     ) = withContext(Dispatchers.IO) {
         val notes = vibes.trim().ifBlank { tripTitle.trim() }
         if (notes.isBlank()) return@withContext
+        if (!trips.trip.value.datesConfirmed) return@withContext
 
         val parsed = VibesParser.parse(notes)
         val trip = trips.trip.value

@@ -4,6 +4,7 @@ import android.content.Context
 import com.wonder.provider.ai.AiSettingsRepository
 import com.wonder.provider.ai.AiTourService
 import com.wonder.provider.ai.TripAutoGenerator
+import com.wonder.provider.ai.TripVibeGenerator
 import com.wonder.provider.ai.CardResolver
 import com.wonder.provider.ai.LocalConversationEngine
 import com.wonder.provider.ai.WonderAgent
@@ -32,11 +33,27 @@ object AppContainer {
     private var initialized = false
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** One-shot: conversation should open straight into listening. */
+    @Volatile
+    private var startVoiceOnConversationOpen = false
+
+    fun requestVoiceOnConversationOpen() {
+        startVoiceOnConversationOpen = true
+    }
+
+    fun consumeVoiceOnConversationOpen(): Boolean {
+        if (!startVoiceOnConversationOpen) return false
+        startVoiceOnConversationOpen = false
+        return true
+    }
+
     lateinit var aiSettingsRepository: AiSettingsRepository
         private set
     lateinit var aiTourService: AiTourService
         private set
     lateinit var tripAutoGenerator: TripAutoGenerator
+        private set
+    lateinit var tripVibeGenerator: TripVibeGenerator
         private set
 
     /** Trips live on-device in Room; one is active at a time. */
@@ -77,6 +94,7 @@ object AppContainer {
 
         aiSettingsRepository = AiSettingsRepository(app)
         aiTourService = AiTourService(aiSettingsRepository)
+        tripVibeGenerator = TripVibeGenerator(aiSettingsRepository)
         trips = TripRepository(app, appScope)
         tripAutoGenerator = TripAutoGenerator(trips, aiTourService)
         customPersonas = CustomPersonaRepository(app)

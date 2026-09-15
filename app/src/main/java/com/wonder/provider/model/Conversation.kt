@@ -112,6 +112,30 @@ sealed interface AgentCard {
     data class FlightResults(
         val result: com.wonder.provider.model.FlightSearchResult
     ) : AgentCard
+
+    /**
+     * Trip dates were never locked in. Shown before any itinerary leg can be applied;
+     * mirrors the New Trip date options.
+     */
+    data class ConfirmDates(
+        val pendingLegs: List<PendingItineraryLeg> = emptyList(),
+        val headline: String = "When is this trip?",
+        val body: String = "Pick an approximate date range before I add anything to the itinerary."
+    ) : AgentCard
 }
+
+/** A planned itinerary stop waiting on a confirmed trip date range. */
+data class PendingItineraryLeg(
+    val title: String,
+    val dayOffset: Int = 0,
+    val kind: ItemKind = ItemKind.ACTIVITY,
+    val startTime: java.time.LocalTime? = null,
+    val durationMinutes: Int = 60,
+    val location: String = "",
+    val notes: String = "",
+    val estimatedCost: Double = 0.0,
+    val costIsPerPerson: Boolean = false,
+    val status: ItemStatus = ItemStatus.PLANNED
+)
 
 enum class DoorwayTarget { PLAN, EXPENSES, SETTINGS }

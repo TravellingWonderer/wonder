@@ -14,6 +14,8 @@ sealed class Screen(val route: String) {
 
     data object Conversation : Screen("conversation")
 
+    data object NewTrip : Screen("new_trip")
+
     data object Plan : Screen("plan?date={date}&item={item}") {
         const val ARG_DATE = "date"
         const val ARG_ITEM = "item"

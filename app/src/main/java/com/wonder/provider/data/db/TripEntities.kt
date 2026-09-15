@@ -28,7 +28,8 @@ data class TripEntity(
     val interestsJson: String,
     val archiveStatus: TripArchiveStatus,
     val mode: TripMode,
-    val modeWasManual: Boolean
+    val modeWasManual: Boolean,
+    val datesConfirmed: Boolean = true
 )
 
 @Entity(

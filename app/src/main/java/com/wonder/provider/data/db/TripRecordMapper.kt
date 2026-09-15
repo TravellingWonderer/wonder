@@ -24,7 +24,8 @@ object TripRecordMapper {
         homeCurrency = entity.homeCurrency,
         homeRate = entity.homeRate,
         coverEmoji = entity.coverEmoji,
-        interests = decodeInterests(entity.interestsJson)
+        interests = decodeInterests(entity.interestsJson),
+        datesConfirmed = entity.datesConfirmed
     )
 
     fun toEntity(
@@ -47,7 +48,8 @@ object TripRecordMapper {
         interestsJson = encodeInterests(trip.interests),
         archiveStatus = archiveStatus,
         mode = mode,
-        modeWasManual = modeWasManual
+        modeWasManual = modeWasManual,
+        datesConfirmed = trip.datesConfirmed
     )
 
     fun toSummary(entity: TripEntity, activeTripId: String): TripSummary = TripSummary(

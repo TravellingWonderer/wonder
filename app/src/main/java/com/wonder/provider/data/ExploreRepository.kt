@@ -35,7 +35,12 @@ class ExploreRepository(
     init {
         scope.launch {
             val tripId = trips.activeTripId()
-            _feed.value = tripId?.let { loadCachedForToday(it) }
+            val trip = trips.trip.value
+            _feed.value = if (tripId != null && TripRepository.hasDecidedDestination(trip.destination)) {
+                loadCachedForToday(tripId)
+            } else {
+                null
+            }
             ensureFeed(force = false)
         }
         scope.launch {
@@ -46,9 +51,21 @@ class ExploreRepository(
     /** Loads today's cached feed; generates once per day when missing or stale. */
     suspend fun ensureFeed(force: Boolean = false) {
         mutex.withLock {
-            val tripId = trips.activeTripId() ?: return
+            val tripId = trips.activeTripId() ?: run {
+                _feed.value = null
+                return
+            }
+            trips.resolveDestinationIfNeeded()
             val trip = trips.trip.value
             val destination = trip.destination
+
+            // Blank / undecided trips must not inherit the previous destination's ideas.
+            if (!TripRepository.hasDecidedDestination(destination)) {
+                _feed.value = null
+                _isRefreshing.value = false
+                return
+            }
+
             val today = LocalDate.now()
             val feedKind = feedKindFor(trip, today)
             val cached = loadCached(tripId, today, feedKind)

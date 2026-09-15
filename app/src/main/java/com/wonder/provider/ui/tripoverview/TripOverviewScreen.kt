@@ -1,7 +1,15 @@
 package com.wonder.provider.ui.tripoverview
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,15 +40,15 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,10 +58,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wonder.provider.AppContainer
@@ -62,6 +79,7 @@ import com.wonder.provider.model.ItemStatus
 import com.wonder.provider.model.MapRouteSegment
 import com.wonder.provider.model.TimelineLeg
 import com.wonder.provider.model.Trip
+import com.wonder.provider.ui.conversation.AmbientBackdrop
 import com.wonder.provider.ui.personas.TripPersonasShortcut
 import com.wonder.provider.ui.theme.WonderColors
 import java.time.format.DateTimeFormatter
@@ -89,17 +107,34 @@ fun TripOverviewScreen(
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showTripMeta by remember { mutableStateOf(false) }
+    val palette = WonderColors.current
+    val emptyTrip = state.legs.isEmpty() && state.trip != null
 
     val mapHeight by animateDpAsState(
-        targetValue = if (state.mapExpanded) 280.dp else 128.dp,
+        targetValue = when {
+            emptyTrip -> 112.dp
+            state.mapExpanded -> 280.dp
+            else -> 148.dp
+        },
         label = "mapHeight"
     )
+
+    fun openChat(withVoice: Boolean) {
+        if (withVoice) AppContainer.requestVoiceOnConversationOpen()
+        if (state.isActive) {
+            onOpenConversation()
+        } else {
+            viewModel.activateTrip(onDone = onOpenConversation)
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
+        AmbientBackdrop(modifier = Modifier.fillMaxSize(), alive = emptyTrip)
+
         if (state.loading) {
             CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.Center),
@@ -114,7 +149,7 @@ fun TripOverviewScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text("Trip not found", style = MaterialTheme.typography.titleMedium)
-                OutlinedButton(onClick = onBack) { Text("Go back") }
+                TextButton(onClick = onBack) { Text("Go back") }
             }
         } else {
             val trip = state.trip!!
@@ -129,18 +164,22 @@ fun TripOverviewScreen(
                     trip = trip,
                     isActive = state.isActive,
                     showMeta = showTripMeta,
+                    emptyTrip = emptyTrip,
                     onBack = onBack,
                     onToggleMeta = { showTripMeta = !showTripMeta },
-                    onActivate = { viewModel.activateTrip(onDone = onOpenConversation) },
-                    onOpenConversation = onOpenConversation
+                    onOpenChat = { openChat(withVoice = false) }
                 )
 
                 Box(
                     modifier = Modifier
+                        .padding(horizontal = 16.dp)
                         .fillMaxWidth()
                         .height(mapHeight)
+                        .shadow(14.dp, RoundedCornerShape(24.dp), ambientColor = palette.aurora[0].copy(0.2f))
+                        .clip(RoundedCornerShape(24.dp))
+                        .border(1.dp, palette.aurora[0].copy(alpha = 0.28f), RoundedCornerShape(24.dp))
                         .animateContentSize()
-                        .clickable { viewModel.toggleMapExpanded() }
+                        .clickable(enabled = !emptyTrip) { viewModel.toggleMapExpanded() }
                 ) {
                     TripMapView(
                         markers = state.markers,
@@ -153,6 +192,20 @@ fun TripOverviewScreen(
                         onMarkerClick = viewModel::selectLeg,
                         modifier = Modifier.fillMaxSize()
                     )
+                    if (emptyTrip) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            palette.aurora[0].copy(alpha = 0.18f),
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                                        )
+                                    )
+                                )
+                        )
+                    }
                     if (state.routeSegments.isNotEmpty() && (state.mapExpanded || state.selectedLegId != null)) {
                         RouteDirectionsStrip(
                             segments = state.routeSegments,
@@ -162,30 +215,35 @@ fun TripOverviewScreen(
                                 .padding(8.dp)
                         )
                     }
-                    MapExpandHint(expanded = state.mapExpanded)
+                    if (!emptyTrip) {
+                        MapExpandHint(expanded = state.mapExpanded)
+                    }
                 }
 
-                Text(
-                    text = "Timeline · tap a stop for details",
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                TripPersonasShortcut(
-                    tripId = trip.id,
-                    onManagePersonas = onManagePersonas,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp)
-                )
-
-                if (state.legs.isEmpty()) {
-                    Text(
-                        text = "No legs planned yet — open chat to start building this trip.",
-                        modifier = Modifier.padding(horizontal = 18.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                if (emptyTrip) {
+                    EmptyTripInvite(
+                        trip = trip,
+                        onVoicePlan = { openChat(withVoice = true) },
+                        onTypePlan = { openChat(withVoice = false) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 16.dp)
                     )
                 } else {
+                    Text(
+                        text = "Timeline · tap a stop for details",
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    TripPersonasShortcut(
+                        tripId = trip.id,
+                        onManagePersonas = onManagePersonas,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp)
+                    )
+
                     LazyColumn(
                         modifier = Modifier
                             .weight(1f)
@@ -223,10 +281,10 @@ private fun OverviewTopBar(
     trip: Trip,
     isActive: Boolean,
     showMeta: Boolean,
+    emptyTrip: Boolean,
     onBack: () -> Unit,
     onToggleMeta: () -> Unit,
-    onActivate: () -> Unit,
-    onOpenConversation: () -> Unit
+    onOpenChat: () -> Unit
 ) {
     val palette = WonderColors.current
     Column(
@@ -241,18 +299,31 @@ private fun OverviewTopBar(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
-            Column(modifier = Modifier.weight(1f)) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(palette.aurora)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(text = trip.coverEmoji, fontSize = 22.sp)
+            }
+            Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
                 Text(
                     text = trip.title,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = trip.destination.split(",").first(),
+                    text = if (emptyTrip) {
+                        "Blank canvas · ready for plans"
+                    } else {
+                        trip.destination.split(",").first()
+                    },
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (emptyTrip) palette.aurora[0] else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -260,62 +331,201 @@ private fun OverviewTopBar(
             IconButton(onClick = onToggleMeta) {
                 Icon(Icons.Outlined.Info, contentDescription = "Trip details")
             }
+            if (!emptyTrip) {
+                IconButton(onClick = onOpenChat) {
+                    Icon(Icons.Outlined.ChatBubbleOutline, contentDescription = "Open chat")
+                }
+            }
         }
 
         if (showMeta) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(palette.cardTint)
-                    .border(1.dp, palette.hairline, RoundedCornerShape(14.dp))
-                    .padding(12.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                palette.aurora[0].copy(alpha = 0.12f),
+                                palette.aurora[1].copy(alpha = 0.08f)
+                            )
+                        )
+                    )
+                    .border(1.dp, palette.hairline, RoundedCornerShape(16.dp))
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
                     text = "${TRIP_RANGE_FORMAT.format(trip.startDate)} – ${TRIP_RANGE_FORMAT.format(trip.endDate)}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "${trip.travellers.size} travellers · ${trip.budget.toInt()} ${trip.currency} budget",
+                    text = "${trip.travellers.size} travellers · ${trip.budget.toInt()} ${trip.currency} budget" +
+                        if (isActive) " · active" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
+    }
+}
 
-        Row(
+@Composable
+private fun EmptyTripInvite(
+    trip: Trip,
+    onVoicePlan: () -> Unit,
+    onTypePlan: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = WonderColors.current
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (isActive) {
-                Button(
-                    onClick = onOpenConversation,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(
-                        Icons.Outlined.ChatBubbleOutline,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .padding(end = 6.dp)
-                            .size(18.dp)
+                .shadow(20.dp, RoundedCornerShape(28.dp), ambientColor = palette.aurora[1].copy(0.28f))
+                .clip(RoundedCornerShape(28.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            palette.aurora[0].copy(alpha = 0.16f),
+                            palette.aurora[1].copy(alpha = 0.10f),
+                            MaterialTheme.colorScheme.surface
+                        )
                     )
-                    Text("Open chat")
-                }
-            } else {
-                OutlinedButton(
-                    onClick = onActivate,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Text("Use this trip")
-                }
+                )
+                .border(1.dp, palette.aurora[0].copy(alpha = 0.35f), RoundedCornerShape(28.dp))
+                .padding(horizontal = 22.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "No plans yet",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = "Tell Wonder what you want for ${trip.title} — flights, food, days out — and it'll shape the itinerary with you.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                lineHeight = 22.sp
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            VoicePlanButton(onClick = onVoicePlan)
+
+            Text(
+                text = "Tap to speak your first plans",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.aurora[0]
+            )
+
+            TextButton(onClick = onTypePlan) {
+                Text(
+                    text = "Or type it in chat",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun VoicePlanButton(onClick: () -> Unit) {
+    val palette = WonderColors.current
+    val transition = rememberInfiniteTransition(label = "voice-cta")
+    val pulse by transition.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.14f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse"
+    )
+    val spin by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(7500, easing = LinearEasing)
+        ),
+        label = "spin"
+    )
+    val glow by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.75f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(156.dp)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val base = size.minDimension / 2f
+            palette.aurora.forEachIndexed { index, color ->
+                val radius = base * (0.58f + index * 0.15f) * pulse
+                drawCircle(
+                    color = color.copy(alpha = (0.22f - index * 0.05f) * glow),
+                    radius = radius,
+                    center = center,
+                    style = Stroke(width = (2.5f + index).dp.toPx())
+                )
+            }
+            rotate(degrees = spin, pivot = center) {
+                drawCircle(
+                    brush = Brush.sweepGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            palette.aurora[0].copy(alpha = 0.7f),
+                            Color.Transparent,
+                            palette.aurora[1].copy(alpha = 0.55f),
+                            Color.Transparent,
+                            palette.aurora[2].copy(alpha = 0.45f),
+                            Color.Transparent
+                        ),
+                        center = center
+                    ),
+                    radius = base * 0.8f * pulse,
+                    center = center,
+                    style = Stroke(width = 5.dp.toPx())
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .size(92.dp)
+                .shadow(22.dp, CircleShape, ambientColor = palette.aurora[0].copy(alpha = 0.5f * glow))
+                .clip(CircleShape)
+                .background(Brush.linearGradient(palette.aurora)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Mic,
+                contentDescription = "Plan by voice",
+                tint = Color.White,
+                modifier = Modifier.size(34.dp)
+            )
         }
     }
 }
@@ -425,10 +635,23 @@ private fun TimelineLegRow(
             modifier = Modifier
                 .weight(1f)
                 .clip(RoundedCornerShape(16.dp))
-                .background(if (selected) palette.cardTint else MaterialTheme.colorScheme.surface)
+                .background(
+                    if (selected) {
+                        Brush.linearGradient(
+                            listOf(
+                                palette.aurora[0].copy(alpha = 0.14f),
+                                palette.aurora[1].copy(alpha = 0.08f)
+                            )
+                        )
+                    } else {
+                        Brush.linearGradient(
+                            listOf(palette.cardTint, palette.cardTint)
+                        )
+                    }
+                )
                 .border(
                     width = if (selected) 1.5.dp else 1.dp,
-                    color = if (selected) MaterialTheme.colorScheme.primary else palette.hairline,
+                    color = if (selected) palette.aurora[0] else palette.hairline,
                     shape = RoundedCornerShape(16.dp)
                 )
                 .clickable(onClick = onClick)
@@ -491,7 +714,7 @@ private fun TimelineRuler(
                 .size(if (selected) 10.dp else 8.dp)
                 .clip(CircleShape)
                 .background(
-                    if (selected) MaterialTheme.colorScheme.primary
+                    if (selected) palette.aurora[0]
                     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
                 )
         )
@@ -512,7 +735,6 @@ private fun LegDetailSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val palette = WonderColors.current
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,

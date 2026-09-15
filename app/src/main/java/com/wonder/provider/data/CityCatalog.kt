@@ -21,6 +21,7 @@ internal object CityCatalog {
         "barcelona" to barcelonaPois(),
         "tokyo" to tokyoPois(),
         "rome" to romePois(),
+        "athens" to generateGenericPois("Athens"),
         "new york" to newYorkPois(),
         "london" to londonPois(),
         "amsterdam" to amsterdamPois()
@@ -45,6 +46,7 @@ internal object CityCatalog {
         "Barcelona, Spain",
         "Tokyo, Japan",
         "Rome, Italy",
+        "Athens, Greece",
         "New York, USA",
         "London, UK",
         "Amsterdam, Netherlands"

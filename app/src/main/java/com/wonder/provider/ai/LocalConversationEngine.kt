@@ -36,13 +36,17 @@ class LocalConversationEngine(private val trips: TripRepository) {
         if (trips.mode.value == TripMode.WANDERING) wanderingGreeting() else plannerGreeting()
 
     /** Warm opener for a freshly created trip — no destination or itinerary status yet. */
-    fun welcomeGreeting(): AgentReply {
+    fun welcomeGreeting(quiet: Boolean = false): AgentReply {
         val trip = trips.trip.value
         val name = trip.travellers.firstOrNull()?.name
             ?.trim()
             ?.takeIf { it.isNotBlank() && !it.equals("you", ignoreCase = true) }
 
         val say = when {
+            quiet && name != null ->
+                "Hey $name — ${trip.title} is ready whenever you are. Ask me anything when you want to start shaping it."
+            quiet ->
+                "Hey — ${trip.title} is ready whenever you are. Ask me anything when you want to start shaping it."
             name != null ->
                 "Hey $name — good to see you. Let's shape ${trip.title} together whenever you're ready."
             else ->
@@ -52,7 +56,7 @@ class LocalConversationEngine(private val trips: TripRepository) {
         return AgentReply(
             say = say,
             intents = emptyList(),
-            suggestions = suggestionPicker.pick(welcomeOnly = true)
+            suggestions = if (quiet) emptyList() else suggestionPicker.pick(welcomeOnly = true)
         )
     }
 

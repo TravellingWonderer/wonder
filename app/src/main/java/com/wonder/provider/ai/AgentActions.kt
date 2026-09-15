@@ -60,7 +60,8 @@ sealed interface AgentAction {
 
 data class AgentActionResult(
     val applied: List<String>,
-    val failed: List<String>
+    val failed: List<String>,
+    val needsDates: List<AgentAction.AddItem> = emptyList()
 ) {
     val didMutate: Boolean get() = applied.isNotEmpty()
 }
@@ -72,14 +73,20 @@ class AgentActionExecutor(private val trips: TripRepository) {
 
         val applied = mutableListOf<String>()
         val failed = mutableListOf<String>()
+        val needsDates = mutableListOf<AgentAction.AddItem>()
+        val datesReady = trips.trip.value.datesConfirmed
 
         actions.forEach { action ->
+            if (!datesReady && action is AgentAction.AddItem) {
+                needsDates += action
+                return@forEach
+            }
             runCatching { apply(action) }
                 .onSuccess { applied += it }
                 .onFailure { failed += it.message.orEmpty().ifBlank { "Could not apply change." } }
         }
 
-        return AgentActionResult(applied, failed)
+        return AgentActionResult(applied, failed, needsDates)
     }
 
     private fun apply(action: AgentAction): String = when (action) {

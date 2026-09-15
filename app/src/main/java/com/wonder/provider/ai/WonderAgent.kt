@@ -10,6 +10,7 @@ import com.wonder.provider.model.DoorwayTarget
 import com.wonder.provider.model.ItemKind
 import com.wonder.provider.model.ItemStatus
 import com.wonder.provider.model.CustomPersona
+import com.wonder.provider.model.PendingItineraryLeg
 import com.wonder.provider.model.PersonaPanel
 import com.wonder.provider.model.Speaker
 import com.wonder.provider.model.TravellerPersonas
@@ -18,6 +19,7 @@ import com.wonder.provider.model.TripMode
 import com.wonder.provider.model.TurnPhase
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 data class AgentResponse(
@@ -198,9 +200,14 @@ class WonderAgent(
     /** The opener travellers see when they arrive — from the connected model when one is set up. */
     suspend fun greeting(): AgentResponse {
         val welcomeOnly = trips.consumeWelcomeOnlyGreeting()
+        val quietWelcome = trips.consumeQuietWelcome()
         val provider = settingsRepository.chatProvider()
         if (provider == null || !settingsRepository.getSettings().isConfigured) {
-            return if (welcomeOnly) builtInWelcomeGreeting() else builtInGreeting()
+            return if (welcomeOnly) {
+                builtInWelcomeGreeting(quiet = quietWelcome)
+            } else {
+                builtInGreeting()
+            }
         }
 
         val greetingPrompt = if (welcomeOnly) WELCOME_GREETING_PROMPT else GREETING_PROMPT
@@ -219,7 +226,8 @@ class WonderAgent(
                     sourceLabel = provider.sourceLabel
                 ),
                 history = emptyList(),
-                welcomeOnly = welcomeOnly
+                welcomeOnly = welcomeOnly,
+                quietWelcome = quietWelcome
             )
         } catch (error: AiTourError.InvalidApiKey) {
             connectedModelFailure(provider, error.message ?: "Invalid API key.")
@@ -255,18 +263,19 @@ class WonderAgent(
         val say = augmentSay(reply.say, actionResult)
         memory().commit(history, input, say)
         withAiSuggestions(
-            AgentResponse(
+            finalizeResponse(
                 say = say,
-                cards = cards.resolve(reply.intents),
-                personaPanels = emptyList(),
+                intents = reply.intents,
+                personaSeed = emptyList(),
                 sourceLabel = provider.sourceLabel,
-                didMutate = actionResult.didMutate
+                actionResult = actionResult
             ),
             history = history + listOf(
                 ChatTurn(id = "pending-user", speaker = Speaker.YOU, text = input),
                 ChatTurn(id = "pending-wonder", speaker = Speaker.WONDER, text = say)
             ),
-            welcomeOnly = false
+            welcomeOnly = false,
+            quietWelcome = false
         )
     } catch (error: AiTourError.InvalidApiKey) {
         connectedModelFailure(provider, error.message ?: "Invalid API key.")
@@ -301,18 +310,75 @@ class WonderAgent(
         val say = augmentSay(reply.say, actionResult)
         memory().commit(history, input, say)
         return withAiSuggestions(
-            AgentResponse(
+            finalizeResponse(
                 say = say,
-                cards = cards.resolve(reply.intents),
-                personaPanels = TravellerPersonas.fromPlainQuestions(reply.suggestions),
+                intents = reply.intents,
+                personaSeed = TravellerPersonas.fromPlainQuestions(reply.suggestions),
                 sourceLabel = ON_DEVICE,
-                didMutate = actionResult.didMutate
+                actionResult = actionResult
             ),
             history = history + listOf(
                 ChatTurn(id = "pending-user", speaker = Speaker.YOU, text = input),
                 ChatTurn(id = "pending-wonder", speaker = Speaker.WONDER, text = say)
             ),
-            welcomeOnly = false
+            welcomeOnly = false,
+            quietWelcome = false
+        )
+    }
+
+    private suspend fun finalizeResponse(
+        say: String,
+        intents: List<CardIntent>,
+        personaSeed: List<PersonaPanel>,
+        sourceLabel: String,
+        actionResult: AgentActionResult
+    ): AgentResponse {
+        val trip = trips.trip.value
+        val pending = actionResult.needsDates.map { it.toPendingLeg(trip.startDate) }
+        val resolved = cards.resolve(intents)
+        val dateCard = when {
+            pending.isNotEmpty() -> AgentCard.ConfirmDates(pendingLegs = pending)
+            !trip.datesConfirmed && intents.any { it is CardIntent.DraftDay } ->
+                AgentCard.ConfirmDates(
+                    pendingLegs = emptyList(),
+                    body = "Pick an approximate date range before I draft days onto the itinerary."
+                )
+            else -> null
+        }
+        val finalSay = when {
+            pending.isNotEmpty() ->
+                "Before I add that to the plan, I need an approximate date range for this trip. " +
+                    "Pick one below and I'll place it."
+            dateCard != null ->
+                "This trip still needs approximate dates before I can build the itinerary. " +
+                    "Choose a range below."
+            else -> say
+        }
+        return AgentResponse(
+            say = finalSay,
+            cards = buildList {
+                if (dateCard != null) add(dateCard)
+                addAll(resolved.filterNot { it is AgentCard.DraftDay && !trip.datesConfirmed })
+            },
+            personaPanels = personaSeed,
+            sourceLabel = sourceLabel,
+            didMutate = actionResult.didMutate
+        )
+    }
+
+    private fun AgentAction.AddItem.toPendingLeg(tripStart: LocalDate): PendingItineraryLeg {
+        val offset = ChronoUnit.DAYS.between(tripStart, date).toInt().coerceAtLeast(0)
+        return PendingItineraryLeg(
+            title = title.trim(),
+            dayOffset = offset,
+            kind = kind,
+            startTime = startTime,
+            durationMinutes = durationMinutes,
+            location = location,
+            notes = notes,
+            estimatedCost = estimatedCost,
+            costIsPerPerson = costIsPerPerson,
+            status = status
         )
     }
 
@@ -332,27 +398,38 @@ class WonderAgent(
             )
         },
         history = emptyList(),
-        welcomeOnly = false
+        welcomeOnly = false,
+        quietWelcome = false
     )
 
-    private suspend fun builtInWelcomeGreeting(): AgentResponse = withAiSuggestions(
-        onDevice.welcomeGreeting().let { reply ->
+    private suspend fun builtInWelcomeGreeting(quiet: Boolean): AgentResponse {
+        val reply = onDevice.welcomeGreeting(quiet = quiet)
+        return withAiSuggestions(
             AgentResponse(
                 say = reply.say,
                 cards = emptyList(),
-                personaPanels = TravellerPersonas.fromPlainQuestions(reply.suggestions),
+                personaPanels = if (quiet) {
+                    emptyList()
+                } else {
+                    TravellerPersonas.fromPlainQuestions(reply.suggestions)
+                },
                 sourceLabel = ON_DEVICE
-            )
-        },
-        history = emptyList(),
-        welcomeOnly = true
-    )
+            ),
+            history = emptyList(),
+            welcomeOnly = true,
+            quietWelcome = quiet
+        )
+    }
 
     private suspend fun withAiSuggestions(
         response: AgentResponse,
         history: List<ChatTurn>,
-        welcomeOnly: Boolean
+        welcomeOnly: Boolean,
+        quietWelcome: Boolean = false
     ): AgentResponse {
+        if (quietWelcome) {
+            return response.copy(personaPanels = emptyList())
+        }
         val exclusions = recentExclusions(history)
         val fallbackPanels = TravellerPersonas.buildDefaultPanels(
             excludePersonas = exclusions.personas,

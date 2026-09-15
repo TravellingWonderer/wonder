@@ -77,6 +77,10 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
     @Volatile
     private var welcomeOnlyGreetingPending = false
 
+    /** Blank create: greet quietly with no suggestion / persona panels. */
+    @Volatile
+    private var quietWelcomePending = false
+
     init {
         runBlocking { bootstrap() }
         scope.launch {
@@ -129,6 +133,15 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
     }
 
     fun peekWelcomeOnlyGreeting(): Boolean = welcomeOnlyGreetingPending
+
+    /** True once after a blank create; cleared with the welcome flag. */
+    fun consumeQuietWelcome(): Boolean {
+        if (!quietWelcomePending) return false
+        quietWelcomePending = false
+        return true
+    }
+
+    fun peekQuietWelcome(): Boolean = quietWelcomePending
 
     val plannedTrips: List<TripSummary>
         get() = _catalog.value.filter { it.archiveStatus == TripArchiveStatus.PLANNED }
@@ -212,22 +225,33 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         startDate: LocalDate,
         endDate: LocalDate,
         vibes: String = "",
-        interests: Set<TourInterest> = setOf(TourInterest.LOCAL)
+        interests: Set<TourInterest> = setOf(TourInterest.LOCAL),
+        blankStart: Boolean = false,
+        datesConfirmed: Boolean = true
     ): String =
         withContext(Dispatchers.IO) {
             require(isValidTripTitle(title)) { "Trip name must be at least 2 characters." }
             persistActiveTripState()
-            val parsed = if (vibes.isNotBlank()) VibesParser.parse(vibes) else null
-            val resolvedDestination = parsed?.city?.takeIf { it.isNotBlank() }
-                ?: destination.trim().ifBlank { DEFAULT_DESTINATION }
-            val resolvedInterests = parsed?.interests?.takeIf { it.isNotEmpty() } ?: interests
+            val notes = vibes.trim().takeUnless { blankStart }.orEmpty()
+            val parsed = if (notes.isNotBlank()) VibesParser.parse(notes) else null
+            val resolvedDestination = DestinationInference.resolve(
+                title = title.trim(),
+                currentDestination = destination,
+                vibesHint = parsed?.city
+            )
+            val resolvedInterests = when {
+                blankStart || notes.isBlank() -> emptySet()
+                else -> parsed?.interests?.takeIf { it.isNotEmpty() } ?: interests
+            }
             createAndActivateTrip(
                 title = title.trim(),
                 destination = resolvedDestination,
                 startDate = startDate,
                 endDate = endDate,
                 coverEmoji = "✈️",
-                interests = resolvedInterests
+                interests = resolvedInterests,
+                quietWelcome = blankStart || notes.isBlank(),
+                datesConfirmed = datesConfirmed
             )
         }
 
@@ -237,7 +261,9 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         startDate: LocalDate,
         endDate: LocalDate,
         coverEmoji: String,
-        interests: Set<TourInterest>
+        interests: Set<TourInterest>,
+        quietWelcome: Boolean = false,
+        datesConfirmed: Boolean = true
     ): String {
         val id = "trip-${System.currentTimeMillis()}"
         val traveller = Traveller("t1", "You", "🙂")
@@ -253,7 +279,8 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
             homeCurrency = "$",
             homeRate = 1.09,
             coverEmoji = coverEmoji,
-            interests = interests
+            interests = interests,
+            datesConfirmed = datesConfirmed
         )
         val entity = TripRecordMapper.toEntity(
             trip = trip,
@@ -264,6 +291,7 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         dao.upsertTrip(entity)
         prefs.edit().putString(KEY_ACTIVE_TRIP, id).apply()
         welcomeOnlyGreetingPending = true
+        quietWelcomePending = quietWelcome
         loadTrip(id, notify = true)
         return id
     }
@@ -277,7 +305,28 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         _expenses.value = dao.expensesForTrip(tripId).map(TripRecordMapper::toExpense)
             .sortedByDescending { it.date }
         _mode.value = if (entity.modeWasManual) entity.mode else naturalMode()
-        if (notify) _activeTripSwitched.tryEmit(Unit)
+        val destinationFilled = backfillDestinationIfNeeded()
+        if (notify || destinationFilled) _activeTripSwitched.tryEmit(Unit)
+    }
+
+    /**
+     * When destination is still the blank placeholder, infer it from the trip title
+     * and/or itinerary locations (e.g. title "Athens" → destination Athens).
+     */
+    private suspend fun backfillDestinationIfNeeded(): Boolean {
+        val trip = _trip.value
+        if (hasDecidedDestination(trip.destination)) return false
+        val inferred = DestinationInference.resolve(
+            title = trip.title,
+            currentDestination = trip.destination,
+            locations = _items.value.map { it.location }
+        )
+        if (!hasDecidedDestination(inferred) || inferred.equals(trip.destination, ignoreCase = true)) {
+            return false
+        }
+        _trip.value = trip.copy(destination = inferred)
+        persistTripMeta()
+        return true
     }
 
     private suspend fun persistActiveTripState() {
@@ -335,7 +384,15 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         }
         scope.launch(Dispatchers.IO) {
             dao.upsertItem(TripRecordMapper.toItemEntity(item, _trip.value.id))
+            if (backfillDestinationIfNeeded()) {
+                _activeTripSwitched.tryEmit(Unit)
+            }
         }
+    }
+
+    /** Infers and persists a real destination when the trip is still on the blank placeholder. */
+    suspend fun resolveDestinationIfNeeded(): Boolean = withContext(Dispatchers.IO) {
+        backfillDestinationIfNeeded()
     }
 
     fun removeItem(id: String) {
@@ -476,6 +533,22 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         scope.launch(Dispatchers.IO) { persistTripMeta() }
     }
 
+    /** Locks in a real date plan for trips created without confirmed dates. */
+    fun confirmDates(whenPlan: com.wonder.provider.model.TripWhenPlan) {
+        val (start, end) = whenPlan.resolvedRange
+        val previous = _trip.value
+        val confirmed = previous.copy(
+            startDate = start,
+            endDate = end,
+            datesConfirmed = true
+        )
+        _trip.value = confirmed
+        if (!modeWasChosen) {
+            _mode.value = naturalModeFor(confirmed)
+        }
+        scope.launch(Dispatchers.IO) { persistTripMeta() }
+    }
+
     fun expensesOn(date: LocalDate): List<Expense> = _expenses.value.filter { it.date == date }
 
     fun budget(): BudgetSummary {
@@ -536,6 +609,12 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         fun isValidTripTitle(title: String): Boolean {
             val trimmed = title.trim()
             return trimmed.length >= 2 && !trimmed.equals("new trip", ignoreCase = true)
+        }
+
+        /** True once the traveller has named a real place — not the blank-trip placeholder. */
+        fun hasDecidedDestination(destination: String): Boolean {
+            val trimmed = destination.trim()
+            return trimmed.isNotBlank() && !trimmed.equals(DEFAULT_DESTINATION, ignoreCase = true)
         }
 
         private val itemOrder = compareBy<ItineraryItem>(

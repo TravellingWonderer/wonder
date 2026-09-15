@@ -13,6 +13,7 @@ internal object CityCoordinates {
         "paris" to GeoCoordinate(48.8566, 2.3522),
         "barcelona" to GeoCoordinate(41.3874, 2.1686),
         "rome" to GeoCoordinate(41.9028, 12.4964),
+        "athens" to GeoCoordinate(37.9838, 23.7275),
         "london" to GeoCoordinate(51.5074, -0.1278),
         "amsterdam" to GeoCoordinate(52.3676, 4.9041),
         "tokyo" to GeoCoordinate(35.6762, 139.6503),

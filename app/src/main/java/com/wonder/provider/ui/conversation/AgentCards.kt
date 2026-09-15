@@ -47,7 +47,10 @@ import com.wonder.provider.model.FlightSearchResult
 import com.wonder.provider.model.ItemStatus
 import com.wonder.provider.model.ItineraryItem
 import com.wonder.provider.model.Recommendation
+import com.wonder.provider.model.TripWhenMode
+import com.wonder.provider.model.TripWhenPlan
 import com.wonder.provider.ui.theme.WonderColors
+import com.wonder.provider.ui.tripwhen.TripWhenPlanPicker
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -62,7 +65,8 @@ data class CardActions(
     val onOpenAddToTrip: (Recommendation) -> Unit = {},
     val onAcceptDraft: (AgentCard.DraftDay) -> Unit = {},
     val onOpenDay: (java.time.LocalDate) -> Unit = {},
-    val onAddFlightOffer: (com.wonder.provider.model.FlightOfferSummary, java.time.LocalDate) -> Unit = { _, _ -> }
+    val onAddFlightOffer: (com.wonder.provider.model.FlightOfferSummary, java.time.LocalDate) -> Unit = { _, _ -> },
+    val onConfirmDates: (AgentCard.ConfirmDates, com.wonder.provider.model.TripWhenPlan) -> Unit = { _, _ -> }
 )
 
 private val CLOCK = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
@@ -82,6 +86,7 @@ fun AgentCardView(card: AgentCard, actions: CardActions, modifier: Modifier = Mo
         is AgentCard.Loose -> LooseCard(card, actions, modifier)
         is AgentCard.Doorway -> DoorwayCard(card, actions, modifier)
         is AgentCard.FlightResults -> FlightResultsCard(card, actions, modifier)
+        is AgentCard.ConfirmDates -> ConfirmDatesCard(card, actions, modifier)
     }
 }
 
@@ -904,6 +909,66 @@ private fun DoorwayCard(card: AgentCard.Doorway, actions: CardActions, modifier:
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
                 tint = palette.aurora[1]
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConfirmDatesCard(
+    card: AgentCard.ConfirmDates,
+    actions: CardActions,
+    modifier: Modifier
+) {
+    val palette = WonderColors.current
+    var whenPlan by remember { mutableStateOf(TripWhenPlan.default()) }
+    val canConfirm = whenPlan.mode != TripWhenMode.FLEXIBLE_CHEAP
+
+    CardShell(modifier) {
+        CardHeading(card.headline)
+        Text(
+            text = card.body,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (card.pendingLegs.isNotEmpty()) {
+            Text(
+                text = "Waiting to add: ${card.pendingLegs.joinToString { it.title }}",
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.aurora[0]
+            )
+        }
+        TripWhenPlanPicker(
+            whenPlan = whenPlan,
+            onWhenPlanChange = { whenPlan = it }
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    if (canConfirm) {
+                        Brush.linearGradient(palette.aurora)
+                    } else {
+                        Brush.linearGradient(
+                            listOf(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        )
+                    }
+                )
+                .clickable(enabled = canConfirm) {
+                    actions.onConfirmDates(card, whenPlan)
+                }
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (canConfirm) "Lock dates & continue" else "Pick a date option first",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = if (canConfirm) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

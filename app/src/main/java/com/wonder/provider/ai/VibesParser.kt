@@ -1,6 +1,6 @@
 package com.wonder.provider.ai
 
-import com.wonder.provider.data.CityCatalog
+import com.wonder.provider.data.DestinationInference
 import com.wonder.provider.model.TourBudget
 import com.wonder.provider.model.TourInterest
 import com.wonder.provider.model.TourPace
@@ -24,13 +24,8 @@ object VibesParser {
         )
     }
 
-    private fun detectCity(input: String): String? {
-        val lower = input.lowercase()
-        CityCatalog.knownCities().firstOrNull { lower.contains(it.substringBefore(",").lowercase()) }
-            ?.let { return it }
-        val match = Regex("\\b(?:in|to|around|at)\\s+([A-Z][\\p{L}'-]+(?:\\s+[A-Z][\\p{L}'-]+)?)").find(input)
-        return match?.groupValues?.get(1)?.takeIf { it.length > 2 }
-    }
+    private fun detectCity(input: String): String? =
+        DestinationInference.fromText(input)
 
     private fun detectInterests(input: String): Set<TourInterest> {
         val lower = input.lowercase()

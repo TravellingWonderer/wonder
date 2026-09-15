@@ -17,11 +17,14 @@ import com.wonder.provider.model.FlightOfferSummary
 import com.wonder.provider.model.ItemKind
 import com.wonder.provider.model.ItemStatus
 import com.wonder.provider.model.ItineraryItem
+import com.wonder.provider.model.PendingItineraryLeg
 import com.wonder.provider.model.PersonaPanel
 import com.wonder.provider.model.PersonaQuestionCatalog
 import com.wonder.provider.model.Recommendation
 import com.wonder.provider.model.Speaker
 import com.wonder.provider.model.TripMode
+import com.wonder.provider.model.TripWhenMode
+import com.wonder.provider.model.TripWhenPlan
 import com.wonder.provider.model.TurnPhase
 import com.wonder.provider.notify.TripAlarms
 import com.wonder.provider.voice.SpeechController
@@ -274,6 +277,29 @@ class ConversationViewModel(
     /** Turns a drafted day into real itinerary items, then says what it did. */
     fun acceptDraft(card: AgentCard.DraftDay) {
         val trip = trips.trip.value
+        if (!trip.datesConfirmed) {
+            respondLocally(
+                say = "Before I add that draft, I need an approximate date range for this trip.",
+                cards = listOf(
+                    AgentCard.ConfirmDates(
+                        pendingLegs = card.tour.stops.mapIndexed { index, stop ->
+                            PendingItineraryLeg(
+                                title = stop.name,
+                                dayOffset = 0,
+                                kind = stop.category.toItemKind(),
+                                durationMinutes = stop.durationMinutes,
+                                location = card.tour.city.substringBefore(","),
+                                notes = stop.tip,
+                                estimatedCost = stop.estimatedCost.toDouble(),
+                                costIsPerPerson = true
+                            )
+                        }
+                    )
+                ),
+                suggestions = emptyList()
+            )
+            return
+        }
         val date = card.date
             ?: trip.dates.firstOrNull { !it.isBefore(LocalDate.now()) && trips.itemsOn(it).isEmpty() }
             ?: LocalDate.now()
@@ -317,6 +343,30 @@ class ConversationViewModel(
 
     fun addRecommendation(pick: Recommendation, date: LocalDate = pick.suggestedDate ?: LocalDate.now()) {
         val trip = trips.trip.value
+        if (!trip.datesConfirmed) {
+            respondLocally(
+                say = "Before I add ${pick.title}, pick an approximate date range for this trip.",
+                cards = listOf(
+                    AgentCard.ConfirmDates(
+                        pendingLegs = listOf(
+                            PendingItineraryLeg(
+                                title = pick.title,
+                                dayOffset = 0,
+                                kind = pick.kind,
+                                startTime = pick.suggestedTime,
+                                durationMinutes = pick.durationMinutes,
+                                location = trip.destination.substringBefore(","),
+                                notes = pick.tip,
+                                estimatedCost = pick.estimatedCost,
+                                costIsPerPerson = true
+                            )
+                        )
+                    )
+                ),
+                suggestions = emptyList()
+            )
+            return
+        }
         trips.upsertItem(
             ItineraryItem(
                 id = trips.newItemId(),
@@ -355,6 +405,50 @@ class ConversationViewModel(
         )
     }
 
+    fun confirmTripDates(card: AgentCard.ConfirmDates, whenPlan: TripWhenPlan) {
+        if (whenPlan.mode == TripWhenMode.FLEXIBLE_CHEAP) return
+        trips.confirmDates(whenPlan)
+        val trip = trips.trip.value
+        val everyone = trip.travellers.map { it.id }.toSet()
+        val lastDayIndex = (trip.dayCount - 1).coerceAtLeast(0)
+        card.pendingLegs.forEach { leg ->
+            val date = trip.startDate.plusDays(leg.dayOffset.coerceIn(0, lastDayIndex).toLong())
+            trips.upsertItem(
+                ItineraryItem(
+                    id = trips.newItemId(),
+                    date = date,
+                    title = leg.title,
+                    kind = leg.kind,
+                    startTime = leg.startTime,
+                    durationMinutes = leg.durationMinutes,
+                    location = leg.location.ifBlank { trip.destination.substringBefore(",") },
+                    notes = leg.notes,
+                    estimatedCost = leg.estimatedCost,
+                    costIsPerPerson = leg.costIsPerPerson,
+                    status = leg.status,
+                    travellerIds = everyone
+                )
+            )
+        }
+        alarms.refresh()
+        refreshTripState()
+        val rangeLabel = whenPlan.summaryLine()
+        respondLocally(
+            say = if (card.pendingLegs.isEmpty()) {
+                "Dates locked — $rangeLabel. Ask me to add anything whenever you're ready."
+            } else {
+                "Dates locked — $rangeLabel. Added ${card.pendingLegs.size} " +
+                    if (card.pendingLegs.size == 1) "stop to the plan." else "stops to the plan."
+            },
+            cards = if (card.pendingLegs.isNotEmpty()) {
+                listOf(dayCard(trip.startDate.plusDays(card.pendingLegs.first().dayOffset.coerceIn(0, lastDayIndex).toLong())))
+            } else {
+                emptyList()
+            },
+            suggestions = listOf("Show me the full plan", "Help me draft day 1", "How's our budget?")
+        )
+    }
+
     fun openAddToTripSheet(pick: Recommendation) {
         val trip = trips.trip.value
         _state.update {
@@ -375,6 +469,29 @@ class ConversationViewModel(
 
     fun addFlightOffer(offer: FlightOfferSummary, date: LocalDate) {
         val trip = trips.trip.value
+        if (!trip.datesConfirmed) {
+            respondLocally(
+                say = "Before I add that flight, pick an approximate date range for this trip.",
+                cards = listOf(
+                    AgentCard.ConfirmDates(
+                        pendingLegs = listOf(
+                            PendingItineraryLeg(
+                                title = "Flight ${offer.origin} → ${offer.destination}",
+                                dayOffset = 0,
+                                kind = ItemKind.FLIGHT,
+                                durationMinutes = 180,
+                                location = offer.origin,
+                                notes = "${offer.airline} · live quote via Duffel",
+                                estimatedCost = offer.price,
+                                costIsPerPerson = false
+                            )
+                        )
+                    )
+                ),
+                suggestions = emptyList()
+            )
+            return
+        }
         val title = "Flight ${offer.origin} → ${offer.destination}"
         trips.upsertItem(
             ItineraryItem(

@@ -26,6 +26,7 @@ import androidx.navigation.navArgument
 import com.wonder.provider.navigation.Screen
 import com.wonder.provider.ui.conversation.ConversationScreen
 import com.wonder.provider.ui.explore.ExploreScreen
+import com.wonder.provider.ui.explore.NewTripScreen
 import com.wonder.provider.ui.expenses.ExpensesScreen
 import com.wonder.provider.ui.plan.PlanScreen
 import com.wonder.provider.ui.screens.AiSettingsScreen
@@ -79,7 +80,34 @@ fun WonderApp() {
                         navController.navigate(Screen.TripOverview.build(tripId))
                     },
                     onOpenSettings = { navController.navigate(Screen.AiSettings.route) },
-                    onOpenPersonas = { navController.navigate(Screen.PersonaLibrary.build()) }
+                    onOpenPersonas = { navController.navigate(Screen.PersonaLibrary.build()) },
+                    onOpenNewTrip = { navController.navigate(Screen.NewTrip.route) }
+                )
+            }
+
+            composable(
+                route = Screen.NewTrip.route,
+                enterTransition = {
+                    fadeIn(tween(240)) + slideInVertically(tween(320)) { it / 10 }
+                },
+                exitTransition = {
+                    fadeOut(tween(180)) + slideOutVertically(tween(240)) { it / 10 }
+                },
+                popEnterTransition = {
+                    fadeIn(tween(220)) + slideInVertically(tween(280)) { -it / 14 }
+                },
+                popExitTransition = {
+                    fadeOut(tween(180)) + slideOutVertically(tween(260)) { it / 8 }
+                }
+            ) {
+                NewTripScreen(
+                    onBack = { navController.popBackStack() },
+                    onCreated = {
+                        navController.navigate(Screen.Conversation.route) {
+                            popUpTo(Screen.Explore.route) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    }
                 )
             }
 

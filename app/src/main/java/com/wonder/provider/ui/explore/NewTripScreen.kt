@@ -4,26 +4,27 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.rounded.CalendarMonth
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FlightTakeoff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
@@ -31,7 +32,6 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DateRangePicker
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,62 +57,97 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import com.wonder.provider.AppContainer
 import com.wonder.provider.data.TripRepository
 import com.wonder.provider.model.NewTripBlueprint
-import com.wonder.provider.model.TripBlueprintComposer
 import com.wonder.provider.model.TripWhenMode
 import com.wonder.provider.model.TripWhenPlan
 import com.wonder.provider.ui.components.MovingGlowBorderBox
+import com.wonder.provider.ui.conversation.AmbientBackdrop
 import com.wonder.provider.ui.theme.WonderColors
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 private val CHIP_DATE = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun NewTripDialog(
-    creating: Boolean,
-    dismissible: Boolean,
-    onDismiss: () -> Unit,
-    onCreate: (NewTripBlueprint) -> Unit
+fun NewTripScreen(
+    onBack: () -> Unit,
+    onCreated: () -> Unit
 ) {
     val palette = WonderColors.current
+    val trips = AppContainer.trips
+    val scope = rememberCoroutineScope()
     val defaultWhen = remember { TripWhenPlan.default() }
 
     var title by remember { mutableStateOf("") }
     var whenPlan by remember { mutableStateOf(defaultWhen) }
     var vibes by remember { mutableStateOf("") }
-    var autoGenerateVibes by remember { mutableStateOf(true) }
+    var generatingVibes by remember { mutableStateOf(false) }
+    var vibeDraftToken by remember { mutableStateOf(0) }
+    var creating by remember { mutableStateOf(false) }
     var showRangeCalendar by remember { mutableStateOf(false) }
     var showAnchorCalendar by remember { mutableStateOf(false) }
 
-    val titleReadyForVibes = TripRepository.isValidTripTitle(title)
-    val shouldComposeVibes = autoGenerateVibes && titleReadyForVibes
+    val titleReady = TripRepository.isValidTripTitle(title)
 
-    LaunchedEffect(title, whenPlan, autoGenerateVibes) {
-        if (shouldComposeVibes) {
-            vibes = TripBlueprintComposer.composeVibes(title, whenPlan)
-        } else if (autoGenerateVibes && !titleReadyForVibes) {
-            vibes = ""
+    LaunchedEffect(vibeDraftToken) {
+        if (vibeDraftToken == 0) return@LaunchedEffect
+        if (!TripRepository.isValidTripTitle(title)) {
+            generatingVibes = false
+            return@LaunchedEffect
         }
+        generatingVibes = true
+        val drafted = runCatching {
+            AppContainer.tripVibeGenerator.generate(title.trim(), whenPlan)
+        }.getOrDefault("")
+        vibes = drafted
+        generatingVibes = false
     }
 
-    val blueprint = remember(title, whenPlan, vibes, autoGenerateVibes) {
+    val blueprint = remember(title, whenPlan, vibes) {
         NewTripBlueprint(
             title = title.trim(),
             whenPlan = whenPlan,
             vibes = vibes.trim(),
-            autoGenerateVibes = autoGenerateVibes
+            autoGenerateVibes = false,
+            blankStart = false
         )
     }
 
-    val valid = TripRepository.isValidTripTitle(title)
+    val valid = titleReady
+
+    fun createTrip(blankStart: Boolean) {
+        if (creating || !valid) return
+        val plan = if (blankStart) {
+            blueprint.copy(vibes = "", blankStart = true)
+        } else {
+            blueprint.copy(blankStart = false)
+        }
+        creating = true
+        scope.launch {
+            try {
+                val (start, end) = plan.dateRange
+                trips.createBlankTrip(
+                    title = plan.title,
+                    destination = TripRepository.DEFAULT_DESTINATION,
+                    startDate = start,
+                    endDate = end,
+                    vibes = plan.effectiveVibes,
+                    blankStart = plan.blankStart || plan.effectiveVibes.isBlank(),
+                    datesConfirmed = plan.datesConfirmed
+                )
+                onCreated()
+            } finally {
+                creating = false
+            }
+        }
+    }
 
     if (showRangeCalendar) {
         TripDateRangePickerDialog(
@@ -139,212 +175,193 @@ fun NewTripDialog(
         )
     }
 
-    Dialog(
-        onDismissRequest = { if (dismissible && !creating) onDismiss() },
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
     ) {
-        Box(
+        AmbientBackdrop(modifier = Modifier.fillMaxSize(), alive = generatingVibes || creating)
+
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.58f))
-                .clickable(
-                    enabled = dismissible && !creating,
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { onDismiss() },
-            contentAlignment = Alignment.Center
+                .statusBarsPadding()
+                .navigationBarsPadding()
         ) {
-            Box(
+            Row(
                 modifier = Modifier
-                    .padding(horizontal = 16.dp, vertical = 20.dp)
-                    .widthIn(max = 420.dp)
                     .fillMaxWidth()
-                    .shadow(28.dp, RoundedCornerShape(30.dp), ambientColor = palette.aurora[0].copy(0.25f))
-                    .clip(RoundedCornerShape(30.dp))
-                    .background(Brush.linearGradient(palette.aurora))
-                    .padding(1.5.dp)
-                    .clickable(enabled = false, onClick = {})
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(28.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.fillMaxWidth()
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable(enabled = !creating, onClick = onBack)
+                        .padding(12.dp)
+                        .size(22.dp),
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "New trip",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "Name it, pick when — vibes are optional",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Brush.linearGradient(palette.aurora)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(
+                    Icon(
+                        imageVector = Icons.Rounded.FlightTakeoff,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(top = 12.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                PopupTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = "Trip name",
+                    placeholder = "Summer in Sicily",
+                    singleLine = true,
+                    enabled = !creating
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SectionLabel("When")
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(
-                                            palette.aurora[0].copy(alpha = 0.16f),
-                                            palette.aurora[1].copy(alpha = 0.08f),
-                                            Color.Transparent
-                                        )
-                                    )
-                                )
-                                .padding(horizontal = 22.dp, vertical = 20.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(44.dp)
-                                        .clip(CircleShape)
-                                        .background(Brush.linearGradient(palette.aurora)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.FlightTakeoff,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "New trip",
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "Name it, pick when, describe the vibe",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                if (dismissible) {
-                                    IconButton(onClick = onDismiss, enabled = !creating) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Close,
-                                            contentDescription = "Close",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        Column(
-                            modifier = Modifier
-                                .padding(horizontal = 20.dp)
-                                .padding(bottom = 22.dp),
-                            verticalArrangement = Arrangement.spacedBy(18.dp)
-                        ) {
-                            PopupTextField(
-                                value = title,
-                                onValueChange = { title = it },
-                                label = "Trip name",
-                                placeholder = "Summer in Sicily",
-                                singleLine = true,
-                                enabled = !creating
+                        TripWhenMode.entries.forEach { mode ->
+                            ModeChip(
+                                label = mode.label,
+                                selected = whenPlan.mode == mode,
+                                enabled = !creating,
+                                onClick = { whenPlan = whenPlan.copy(mode = mode) }
                             )
-
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                SectionLabel("When")
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .horizontalScroll(rememberScrollState()),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    TripWhenMode.entries.forEach { mode ->
-                                        ModeChip(
-                                            label = mode.label,
-                                            selected = whenPlan.mode == mode,
-                                            enabled = !creating,
-                                            onClick = {
-                                                whenPlan = whenPlan.copy(mode = mode)
-                                            }
-                                        )
-                                    }
-                                }
-
-                                WhenPlanCard(
-                                    whenPlan = whenPlan,
-                                    enabled = !creating,
-                                    onOpenRangeCalendar = { showRangeCalendar = true },
-                                    onOpenAnchorCalendar = { showAnchorCalendar = true },
-                                    onFlexDaysChange = { whenPlan = whenPlan.copy(flexDays = it) },
-                                    onDurationChange = { whenPlan = whenPlan.copy(durationDays = it) },
-                                    onWeekendCountChange = { whenPlan = whenPlan.copy(weekendCount = it) }
-                                )
-                            }
-
-                            if (shouldComposeVibes) {
-                                MovingGlowBorderBox(
-                                    active = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    cornerRadius = 22.dp,
-                                    colors = palette.aurora
-                                ) {
-                                    PopupTextField(
-                                        value = vibes,
-                                        onValueChange = { updated ->
-                                            if (autoGenerateVibes) autoGenerateVibes = false
-                                            vibes = updated
-                                        },
-                                        label = "Vibes",
-                                        placeholder = "Relaxed food crawl, hidden gems, golden-hour views…",
-                                        singleLine = false,
-                                        minLines = 3,
-                                        enabled = !creating,
-                                        elevated = false
-                                    )
-                                }
-                            } else {
-                                PopupTextField(
-                                    value = vibes,
-                                    onValueChange = { updated ->
-                                        if (autoGenerateVibes) autoGenerateVibes = false
-                                        vibes = updated
-                                    },
-                                    label = "Vibes",
-                                    placeholder = if (titleReadyForVibes) {
-                                        "Relaxed food crawl, hidden gems, golden-hour views…"
-                                    } else {
-                                        "Name your trip first — we'll draft the vibe for you"
-                                    },
-                                    singleLine = false,
-                                    minLines = 3,
-                                    enabled = !creating
-                                )
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .shadow(12.dp, RoundedCornerShape(18.dp), ambientColor = palette.aurora[0].copy(0.3f))
-                                    .clip(RoundedCornerShape(18.dp))
-                                    .background(Brush.linearGradient(palette.aurora))
-                                    .clickable(enabled = valid && !creating) { onCreate(blueprint) }
-                                    .padding(vertical = 16.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (creating) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(22.dp),
-                                        strokeWidth = 2.dp,
-                                        color = Color.White
-                                    )
-                                } else {
-                                    Text(
-                                        text = "Create trip",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color.White
-                                    )
-                                }
-                            }
                         }
                     }
+
+                    WhenPlanCard(
+                        whenPlan = whenPlan,
+                        enabled = !creating,
+                        onOpenRangeCalendar = { showRangeCalendar = true },
+                        onOpenAnchorCalendar = { showAnchorCalendar = true },
+                        onFlexDaysChange = { whenPlan = whenPlan.copy(flexDays = it) },
+                        onDurationChange = { whenPlan = whenPlan.copy(durationDays = it) },
+                        onWeekendCountChange = { whenPlan = whenPlan.copy(weekendCount = it) }
+                    )
+                }
+
+                if (generatingVibes || vibes.isNotBlank()) {
+                    MovingGlowBorderBox(
+                        active = generatingVibes || vibes.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                        cornerRadius = 22.dp,
+                        colors = palette.aurora
+                    ) {
+                        OptionalVibesField(
+                            value = vibes,
+                            onValueChange = { vibes = it },
+                            generating = generatingVibes,
+                            titleReady = titleReady,
+                            enabled = !creating && !generatingVibes,
+                            onDraft = { vibeDraftToken++ },
+                            elevated = false
+                        )
+                    }
+                } else {
+                    OptionalVibesField(
+                        value = vibes,
+                        onValueChange = { vibes = it },
+                        generating = generatingVibes,
+                        titleReady = titleReady,
+                        enabled = !creating && !generatingVibes,
+                        onDraft = { vibeDraftToken++ },
+                        elevated = true
+                    )
+                }
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .shadow(12.dp, RoundedCornerShape(18.dp), ambientColor = palette.aurora[0].copy(0.3f))
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(Brush.linearGradient(palette.aurora))
+                            .clickable(enabled = valid && !creating && !generatingVibes) {
+                                createTrip(blankStart = false)
+                            }
+                            .padding(vertical = 16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (creating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Text(
+                                text = if (vibes.isBlank()) "Create trip" else "Create with vibes",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    TextButton(
+                        onClick = { createTrip(blankStart = true) },
+                        enabled = valid && !creating && !generatingVibes
+                    ) {
+                        Text(
+                            text = "Create blank trip",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = "Just the name and dates — no plans or suggestions yet",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                    )
                 }
             }
         }
@@ -633,6 +650,96 @@ private fun DateBadge(
             fontWeight = FontWeight.SemiBold,
             color = accent
         )
+    }
+}
+
+@Composable
+private fun OptionalVibesField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    generating: Boolean,
+    titleReady: Boolean,
+    enabled: Boolean,
+    onDraft: () -> Unit,
+    elevated: Boolean
+) {
+    val palette = WonderColors.current
+    val shape = RoundedCornerShape(22.dp)
+
+    Surface(
+        shape = shape,
+        color = palette.cardTint,
+        shadowElevation = if (elevated) 10.dp else 0.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (elevated) {
+                    Modifier.border(1.dp, palette.hairline.copy(alpha = 0.5f), shape)
+                } else {
+                    Modifier
+                }
+            )
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = if (generating) "Vibes · drafting…" else "Vibes · optional",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.aurora[0],
+                    fontWeight = FontWeight.SemiBold
+                )
+                TextButton(
+                    onClick = onDraft,
+                    enabled = enabled && titleReady && !generating,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                ) {
+                    Text(
+                        text = if (value.isBlank()) "Draft for me" else "Redraft",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (enabled && titleReady) palette.aurora[0]
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                    )
+                }
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                enabled = enabled,
+                singleLine = false,
+                minLines = 3,
+                maxLines = 6,
+                textStyle = TextStyle(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 16.sp,
+                    lineHeight = 22.sp
+                ),
+                cursorBrush = SolidColor(palette.aurora[0]),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { inner ->
+                    Box {
+                        if (value.isEmpty()) {
+                            Text(
+                                text = when {
+                                    generating -> "Reading the meaning in your trip name…"
+                                    titleReady -> "Optional — add a brief, or tap Draft for me"
+                                    else -> "Name your trip first if you want a drafted vibe"
+                                },
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                            )
+                        }
+                        inner()
+                    }
+                }
+            )
+        }
     }
 }
 
