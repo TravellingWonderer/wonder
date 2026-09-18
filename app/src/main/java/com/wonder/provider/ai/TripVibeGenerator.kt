@@ -41,7 +41,7 @@ class TripVibeGenerator(
     }
 
     private fun userPrompt(title: String, whenPlan: TripWhenPlan): String = buildString {
-        appendLine("Trip name: \"$title\"")
+        appendLine("Trip name: \"$title\" (this is a nickname — not a city unless a real place is clearly in the words)")
         appendLine("Length: ${whenPlan.tripDays} day(s)")
         appendLine("Timing: ${whenPlan.describeForVibes()}")
         appendLine("Timing mode: ${whenPlan.mode.label}")
@@ -210,14 +210,15 @@ class TripVibeGenerator(
 
         val SYSTEM = """
             You are an expert travel advisor writing the "Vibes" field for a new trip.
-            Infer the REAL intent hidden inside the trip name — destination, mood, pace,
-            who it's for, what kind of days they want — then write 2–4 vivid sentences.
+            Infer the REAL intent hidden inside the trip name — mood, pace, who it's for,
+            what kind of days they want — then write 2–4 vivid sentences.
 
             Rules:
             - Do NOT quote, repeat, or paste the trip name into the text.
             - Do NOT start with "Think of…", "Here's the brief…", or "A X-day trip named…".
+            - Do NOT invent a destination. A trip name is a nickname. Only mention a city or country if it is a well-known real place clearly written in the title (e.g. "Lisbon with friends"). "succint trip" is not a place.
             - Sound original and fun, like a sharp advisor with a wink — never brochure filler.
-            - Mention concrete cues (food, neighborhoods, pace, season, nightlife, nature) when the name implies them.
+            - Mention concrete cues (food, neighborhoods, pace, season, nightlife, nature) when the name implies them — as moods, not fake geography.
             - Plain prose only. No markdown, bullets, titles, or JSON.
             - Keep it under 80 words.
         """.trimIndent()

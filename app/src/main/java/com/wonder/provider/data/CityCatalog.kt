@@ -28,30 +28,132 @@ internal object CityCatalog {
         "amsterdam" to amsterdamPois()
     )
 
-    fun resolveCity(input: String): String {
-        val normalized = input.trim().lowercase()
-        return cities.keys.firstOrNull { normalized.contains(it) || it.contains(normalized.split(",").first().trim()) }
-            ?: normalized.split(",").first().trim().replaceFirstChar { it.uppercase() }
+    /**
+     * Well-known places we may treat as destinations without a geocode round-trip.
+     * Keys are lowercase; values are canonical labels.
+     */
+    private val gazetteer: Map<String, String> = buildMap {
+        fun add(label: String, vararg aliases: String) {
+            put(label.substringBefore(",").trim().lowercase(), label)
+            aliases.forEach { put(it.lowercase(), label) }
+        }
+        add("Lyon, France")
+        add("Nice, France")
+        add("Bordeaux, France")
+        add("Valencia, Spain")
+        add("Krakow, Poland")
+        add("Warsaw, Poland")
+        add("Brussels, Belgium")
+        add("Zurich, Switzerland")
+        add("Geneva, Switzerland")
+        add("Lisbon, Portugal", "lisboa")
+        add("Porto, Portugal")
+        add("Sintra, Portugal")
+        add("Portugal")
+        add("Paris, France")
+        add("France")
+        add("Barcelona, Spain")
+        add("Madrid, Spain")
+        add("Seville, Spain", "sevilla")
+        add("Spain")
+        add("Rome, Italy", "roma")
+        add("Milan, Italy", "milano")
+        add("Florence, Italy", "firenze")
+        add("Venice, Italy", "venezia")
+        add("Naples, Italy", "napoli")
+        add("Italy")
+        add("Athens, Greece")
+        add("Greece")
+        add("Tokyo, Japan")
+        add("Kyoto, Japan")
+        add("Osaka, Japan")
+        add("Japan")
+        add("New York, USA", "nyc", "new york city")
+        add("Los Angeles, USA", "la")
+        add("San Francisco, USA")
+        add("Chicago, USA")
+        add("USA", "united states", "america")
+        add("London, UK", "england")
+        add("Edinburgh, UK")
+        add("Manchester, UK")
+        add("UK", "united kingdom", "britain")
+        add("Amsterdam, Netherlands")
+        add("Netherlands", "holland")
+        add("Berlin, Germany")
+        add("Munich, Germany", "münchen")
+        add("Germany")
+        add("Prague, Czechia", "praha")
+        add("Vienna, Austria", "wien")
+        add("Budapest, Hungary")
+        add("Copenhagen, Denmark")
+        add("Stockholm, Sweden")
+        add("Oslo, Norway")
+        add("Helsinki, Finland")
+        add("Dublin, Ireland")
+        add("Reykjavik, Iceland")
+        add("Istanbul, Turkey")
+        add("Dubai, UAE")
+        add("Bangkok, Thailand")
+        add("Singapore")
+        add("Seoul, South Korea")
+        add("Hong Kong")
+        add("Sydney, Australia")
+        add("Melbourne, Australia")
+        add("Auckland, New Zealand")
+        add("Toronto, Canada")
+        add("Vancouver, Canada")
+        add("Montreal, Canada")
+        add("Mexico City, Mexico")
+        add("Oaxaca, Mexico")
+        add("Marrakech, Morocco")
+        add("Cairo, Egypt")
+        add("Cape Town, South Africa")
+        add("Rio de Janeiro, Brazil", "rio")
+        add("Buenos Aires, Argentina")
+        add("Lima, Peru")
+        add("Mumbai, India")
+        add("Delhi, India", "new delhi")
+        add("Bali, Indonesia")
+        add("Hanoi, Vietnam")
+        add("Ho Chi Minh City, Vietnam", "saigon")
     }
+
+    fun knownPlaceLabel(input: String): String? {
+        val lower = input.trim().lowercase()
+        if (lower.isBlank()) return null
+        return gazetteer.entries
+            .filter { (key, label) ->
+                containsPlaceToken(lower, key) || containsPlaceToken(lower, label.lowercase())
+            }
+            .maxByOrNull { (key, label) ->
+                val cityBonus = if (label.contains(",")) 1_000 else 0
+                cityBonus + key.length
+            }
+            ?.value
+    }
+
+    fun isKnownPlace(input: String): Boolean = knownPlaceLabel(input) != null
+
+    fun resolveCity(input: String): String =
+        knownPlaceLabel(input)?.substringBefore(",")?.trim()
+            ?: input.trim().substringBefore(",").trim().replaceFirstChar { it.uppercase() }
 
     fun getPois(city: String): List<PointOfInterest> {
-        val key = cities.keys.firstOrNull {
-            city.lowercase().contains(it)
-        }
-        return if (key != null) cities[key]!! else generateGenericPois(city)
+        val key = cities.keys
+            .filter { containsPlaceToken(city.lowercase(), it) }
+            .maxByOrNull { it.length }
+            ?: return emptyList()
+        return cities[key].orEmpty()
     }
 
-    fun knownCities() = listOf(
-        "Lisbon, Portugal",
-        "Paris, France",
-        "Barcelona, Spain",
-        "Tokyo, Japan",
-        "Rome, Italy",
-        "Athens, Greece",
-        "New York, USA",
-        "London, UK",
-        "Amsterdam, Netherlands"
-    )
+    fun knownCities(): List<String> = gazetteer.values.distinct()
+
+    private fun containsPlaceToken(haystack: String, needle: String): Boolean {
+        val token = needle.trim()
+        if (token.length < 3) return false
+        if (token.contains(" ")) return haystack.contains(token)
+        return Regex("""\b${Regex.escape(token)}\b""").containsMatchIn(haystack)
+    }
 
     private fun generateGenericPois(city: String): List<PointOfInterest> {
         val c = city.split(",").first().trim()

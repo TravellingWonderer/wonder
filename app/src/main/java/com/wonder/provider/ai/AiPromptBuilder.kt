@@ -35,6 +35,8 @@ object AiPromptBuilder {
 
         return buildString {
             appendLine("Create a ${request.duration.label.lowercase()} tour for ${request.city}.")
+            appendLine("Only include real, well-known places that exist in that destination.")
+            appendLine("Never invent a city from a trip nickname. If the city is not a real place, return {\"title\":\"\",\"summary\":\"\",\"highlights\":[],\"stops\":[]}.")
             appendLine("Interests: $interests")
             appendLine("Pace: ${request.pace.label} (${request.pace.stopsPerDay} stops/day)")
             appendLine("Budget: ${request.budget.label} (max €${request.budget.maxStopCost}/stop)")

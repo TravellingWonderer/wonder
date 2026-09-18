@@ -1,10 +1,8 @@
 package com.wonder.provider.data
 
-import android.content.Context
 import com.wonder.provider.data.db.CustomPersonaDao
 import com.wonder.provider.data.db.CustomPersonaEntity
 import com.wonder.provider.data.db.TripPersonaAttachmentEntity
-import com.wonder.provider.data.db.WonderDatabase
 import com.wonder.provider.model.CustomPersona
 import com.wonder.provider.model.PersonaIconCatalog
 import kotlinx.coroutines.Dispatchers
@@ -12,9 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
-class CustomPersonaRepository(context: Context) {
-
-    private val dao: CustomPersonaDao = WonderDatabase.get(context.applicationContext).customPersonaDao()
+class CustomPersonaRepository(private val dao: CustomPersonaDao) {
 
     fun observeAll(): Flow<List<CustomPersona>> =
         dao.observeAll().map { entities -> entities.map(::toModel) }

@@ -1,6 +1,7 @@
 package com.wonder.provider.ai
 
 import com.wonder.provider.data.CityCatalog
+import com.wonder.provider.data.DestinationInference
 import com.wonder.provider.data.PointOfInterest
 import com.wonder.provider.data.TripRepository
 import com.wonder.provider.model.ChatTurn
@@ -798,13 +799,7 @@ class LocalConversationEngine(private val trips: TripRepository) {
         }
     }
 
-    private fun detectCity(input: String): String? {
-        val lower = input.lowercase()
-        CityCatalog.knownCities().firstOrNull { lower.contains(it.substringBefore(",").lowercase()) }
-            ?.let { return it }
-        val match = Regex("\\b(?:in|to|around|at)\\s+([A-Z][\\p{L}'-]+(?:\\s+[A-Z][\\p{L}'-]+)?)").find(input)
-        return match?.groupValues?.get(1)?.takeIf { it.length > 2 }
-    }
+    private fun detectCity(input: String): String? = DestinationInference.fromText(input)
 
     private fun detectKind(text: String): ItemKind? = when {
         matches(text, listOf("eat", "food", "lunch", "dinner", "breakfast", "restaurant", "hungry")) -> ItemKind.FOOD

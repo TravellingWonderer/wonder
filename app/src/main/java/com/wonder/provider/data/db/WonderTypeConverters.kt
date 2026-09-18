@@ -4,6 +4,7 @@ import androidx.room.TypeConverter
 import com.wonder.provider.model.ExpenseCategory
 import com.wonder.provider.model.ItemKind
 import com.wonder.provider.model.ItemStatus
+import com.wonder.provider.model.TourInterest
 import com.wonder.provider.model.TripArchiveStatus
 import com.wonder.provider.model.TripMode
 import java.time.LocalDate
@@ -38,6 +39,10 @@ class WonderTypeConverters {
     @TypeConverter fun fromExpenseCategory(value: ExpenseCategory): String = value.name
 
     @TypeConverter fun toExpenseCategory(value: String): ExpenseCategory = ExpenseCategory.valueOf(value)
+
+    @TypeConverter fun fromTourInterest(value: TourInterest): String = value.name
+
+    @TypeConverter fun toTourInterest(value: String): TourInterest = TourInterest.valueOf(value)
 
     @TypeConverter fun fromTravellerIds(value: Set<String>): String = value.joinToString(",")
 

@@ -61,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.wonder.provider.AppContainer
 import com.wonder.provider.data.NearbyLocationStatus
+import com.wonder.provider.data.DestinationInference
 import com.wonder.provider.data.TripRepository
 import com.wonder.provider.model.ExploreFeed
 import com.wonder.provider.model.ExplorePlacePick
@@ -122,7 +123,7 @@ fun ExploreScreen(
     var browsingNearby by remember { mutableStateOf(!hasActiveTrip) }
     val isNearbyMode = browsingNearby || !hasActiveTrip
     val tripNeedsCity = hasActiveTrip && !isNearbyMode &&
-        !TripRepository.hasDecidedDestination(trip.destination)
+        !DestinationInference.isGrounded(trip.destination)
     val displayFeed = when {
         isNearbyMode -> nearbyFeed
         tripNeedsCity -> null

@@ -6,32 +6,42 @@ import com.wonder.provider.model.TourInterest
 import com.wonder.provider.model.Traveller
 import com.wonder.provider.model.Trip
 import com.wonder.provider.model.TripArchiveStatus
+import com.wonder.provider.model.TripMode
 import com.wonder.provider.model.TripSummary
 import org.json.JSONArray
-import org.json.JSONObject
 
 object TripRecordMapper {
 
-    fun toTrip(entity: TripEntity): Trip = Trip(
+    fun toTrip(details: TripWithDetails): Trip = toTrip(
+        entity = details.trip,
+        travellers = details.travellers,
+        interests = details.interests
+    )
+
+    fun toTrip(
+        entity: TripEntity,
+        travellers: List<TravellerEntity>,
+        interests: List<TripInterestEntity>
+    ): Trip = Trip(
         id = entity.id,
         title = entity.title,
         destination = entity.destination,
         startDate = entity.startDate,
         endDate = entity.endDate,
-        travellers = decodeTravellers(entity.travellersJson),
+        travellers = travellers.sortedBy { it.sortOrder }.map(::toTraveller),
         budget = entity.budget,
         currency = entity.currency,
         homeCurrency = entity.homeCurrency,
         homeRate = entity.homeRate,
         coverEmoji = entity.coverEmoji,
-        interests = decodeInterests(entity.interestsJson),
+        interests = interests.map { it.interest }.toSet(),
         datesConfirmed = entity.datesConfirmed
     )
 
     fun toEntity(
         trip: Trip,
         archiveStatus: TripArchiveStatus,
-        mode: com.wonder.provider.model.TripMode,
+        mode: TripMode,
         modeWasManual: Boolean
     ): TripEntity = TripEntity(
         id = trip.id,
@@ -44,12 +54,32 @@ object TripRecordMapper {
         homeCurrency = trip.homeCurrency,
         homeRate = trip.homeRate,
         coverEmoji = trip.coverEmoji,
-        travellersJson = encodeTravellers(trip.travellers),
-        interestsJson = encodeInterests(trip.interests),
         archiveStatus = archiveStatus,
         mode = mode,
         modeWasManual = modeWasManual,
         datesConfirmed = trip.datesConfirmed
+    )
+
+    fun toTravellerEntities(trip: Trip): List<TravellerEntity> =
+        trip.travellers.mapIndexed { index, traveller ->
+            TravellerEntity(
+                id = traveller.id,
+                tripId = trip.id,
+                name = traveller.name,
+                emoji = traveller.emoji,
+                sortOrder = index
+            )
+        }
+
+    fun toInterestEntities(trip: Trip): List<TripInterestEntity> =
+        trip.interests.map { interest ->
+            TripInterestEntity(tripId = trip.id, interest = interest)
+        }
+
+    fun toTraveller(entity: TravellerEntity): Traveller = Traveller(
+        id = entity.id,
+        name = entity.name,
+        emoji = entity.emoji
     )
 
     fun toSummary(entity: TripEntity, activeTripId: String): TripSummary = TripSummary(
@@ -121,19 +151,6 @@ object TripRecordMapper {
         note = expense.note
     )
 
-    fun encodeTravellers(travellers: List<Traveller>): String {
-        val array = JSONArray()
-        travellers.forEach { traveller ->
-            array.put(
-                JSONObject()
-                    .put("id", traveller.id)
-                    .put("name", traveller.name)
-                    .put("emoji", traveller.emoji)
-            )
-        }
-        return array.toString()
-    }
-
     fun decodeTravellers(json: String): List<Traveller> {
         if (json.isBlank()) return emptyList()
         val array = JSONArray(json)
@@ -149,12 +166,6 @@ object TripRecordMapper {
                 )
             }
         }
-    }
-
-    fun encodeInterests(interests: Set<TourInterest>): String {
-        val array = JSONArray()
-        interests.forEach { array.put(it.name) }
-        return array.toString()
     }
 
     fun decodeInterests(json: String): Set<TourInterest> {

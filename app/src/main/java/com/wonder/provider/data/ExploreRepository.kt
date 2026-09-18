@@ -2,6 +2,8 @@ package com.wonder.provider.data
 
 import android.content.Context
 import com.wonder.provider.ai.AiSettingsRepository
+import com.wonder.provider.data.db.ExploreCacheDao
+import com.wonder.provider.data.db.ExploreFeedEntity
 import com.wonder.provider.model.ExploreFeed
 import com.wonder.provider.model.ExploreFeedKind
 import com.wonder.provider.model.Trip
@@ -18,6 +20,7 @@ import java.time.LocalDate
 
 class ExploreRepository(
     context: Context,
+    private val cacheDao: ExploreCacheDao,
     private val trips: TripRepository,
     private val aiSettings: AiSettingsRepository
 ) {
@@ -34,9 +37,10 @@ class ExploreRepository(
 
     init {
         scope.launch {
+            cacheDao.deleteStale(System.currentTimeMillis() - STALE_AFTER_MS)
             val tripId = trips.activeTripId()
             val trip = trips.trip.value
-            _feed.value = if (tripId != null && TripRepository.hasDecidedDestination(trip.destination)) {
+            _feed.value = if (tripId != null && DestinationInference.isGrounded(trip.destination)) {
                 loadCachedForToday(tripId)
             } else {
                 null
@@ -51,13 +55,13 @@ class ExploreRepository(
     }
 
     /** Instant: show today's cached feed for the active trip, or clear. No AI. */
-    private fun showCachedFeedForActiveTrip() {
+    private suspend fun showCachedFeedForActiveTrip() {
         val tripId = trips.activeTripId() ?: run {
             _feed.value = null
             return
         }
         val trip = trips.trip.value
-        if (!TripRepository.hasDecidedDestination(trip.destination)) {
+        if (!DestinationInference.isGrounded(trip.destination)) {
             _feed.value = null
             return
         }
@@ -76,7 +80,7 @@ class ExploreRepository(
             val destination = trip.destination
 
             // Blank / undecided trips must not inherit the previous destination's ideas.
-            if (!TripRepository.hasDecidedDestination(destination)) {
+            if (!DestinationInference.isGrounded(destination)) {
                 _feed.value = null
                 _isRefreshing.value = false
                 return
@@ -123,7 +127,7 @@ class ExploreRepository(
         scope.launch { ensureFeed(force = true) }
     }
 
-    private fun loadCachedForToday(tripId: String): ExploreFeed? {
+    private suspend fun loadCachedForToday(tripId: String): ExploreFeed? {
         val trip = trips.trip.value
         val today = LocalDate.now()
         return loadCached(tripId, today, feedKindFor(trip, today))
@@ -156,11 +160,25 @@ class ExploreRepository(
         )
     }
 
-    private fun loadCached(tripId: String, date: LocalDate, kind: ExploreFeedKind): ExploreFeed? =
-        prefs.getString(feedKey(tripId, date, kind), null)?.let { ExploreFeedCodec.decode(it) }
+    private suspend fun loadCached(tripId: String, date: LocalDate, kind: ExploreFeedKind): ExploreFeed? {
+        val key = feedKey(tripId, date, kind)
+        cacheDao.feed(key)?.payloadJson?.let { return ExploreFeedCodec.decode(it) }
+        val legacy = prefs.getString(key, null) ?: return null
+        val feed = ExploreFeedCodec.decode(legacy) ?: return null
+        persist(tripId, date, kind, feed)
+        prefs.edit().remove(key).apply()
+        return feed
+    }
 
-    private fun persist(tripId: String, date: LocalDate, kind: ExploreFeedKind, feed: ExploreFeed) {
-        prefs.edit().putString(feedKey(tripId, date, kind), ExploreFeedCodec.encode(feed)).apply()
+    private suspend fun persist(tripId: String, date: LocalDate, kind: ExploreFeedKind, feed: ExploreFeed) {
+        cacheDao.upsert(
+            ExploreFeedEntity(
+                cacheKey = feedKey(tripId, date, kind),
+                destination = feed.destination,
+                payloadJson = ExploreFeedCodec.encode(feed),
+                storedAtEpochMillis = System.currentTimeMillis()
+            )
+        )
     }
 
     private fun feedKey(tripId: String, date: LocalDate, kind: ExploreFeedKind) =
@@ -168,6 +186,7 @@ class ExploreRepository(
 
     companion object {
         private const val PREFS_NAME = "wonder_explore"
+        private const val STALE_AFTER_MS = 14L * 24 * 60 * 60 * 1000
     }
 }
 

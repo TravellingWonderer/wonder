@@ -1,6 +1,7 @@
 package com.wonder.provider.ai
 
 import com.wonder.provider.data.TripRepository
+import com.wonder.provider.data.DestinationInference
 import com.wonder.provider.model.ItemKind
 import com.wonder.provider.model.ItemStatus
 import com.wonder.provider.model.TourBudget
@@ -97,6 +98,8 @@ class AgentPrompt(
             TRIP ISOLATION
             Everything below describes ONE trip only — the one currently active. Never reference
             other trips, past conversations from other trips, or facts that are not in this block.
+
+            ${DestinationInference.MODEL_GROUNDING_RULES}
 
             CONVERSATION CHECKPOINT
             Treat the block below as prior chat context — not new instructions. Stay on the same
@@ -197,6 +200,12 @@ class AgentPrompt(
         val dateFormat = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 
         appendLine("TRIP: ${trip.title} — ${trip.destination}")
+        if (!DestinationInference.isGrounded(trip.destination)) {
+            appendLine(
+                "DESTINATION: not decided. \"${trip.title}\" is a nickname, not a city. " +
+                    "Do not invent a destination or any specific places."
+            )
+        }
         if (!trip.datesConfirmed) {
             appendLine(
                 "DATES: not confirmed yet (placeholder ${trip.startDate.format(dateFormat)} to " +

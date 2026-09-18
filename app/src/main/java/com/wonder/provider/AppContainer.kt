@@ -20,6 +20,7 @@ import com.wonder.provider.data.maps.DeviceLocationProvider
 import com.wonder.provider.data.maps.TripGeocoder
 import com.wonder.provider.data.maps.TripRouteFetcher
 import com.wonder.provider.data.maps.TravelProfileRepository
+import com.wonder.provider.data.db.WonderDatabase
 import com.wonder.provider.data.travel.TravelApiSettingsRepository
 import com.wonder.provider.data.travel.TravelSearchRepository
 import com.wonder.provider.notify.TripAlarms
@@ -27,6 +28,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 object AppContainer {
 
@@ -57,6 +59,8 @@ object AppContainer {
         private set
 
     /** Trips live on-device in Room; one is active at a time. */
+    lateinit var database: WonderDatabase
+        private set
     lateinit var trips: TripRepository
         private set
     lateinit var travelProfile: TravelProfileRepository
@@ -95,9 +99,11 @@ object AppContainer {
         aiSettingsRepository = AiSettingsRepository(app)
         aiTourService = AiTourService(aiSettingsRepository)
         tripVibeGenerator = TripVibeGenerator(aiSettingsRepository)
-        trips = TripRepository(app, appScope)
-        customPersonas = CustomPersonaRepository(app)
-        travelProfile = TravelProfileRepository(app)
+        database = WonderDatabase.build(app)
+        trips = TripRepository(app, database, appScope)
+        runBlocking(Dispatchers.IO) { trips.prepare() }
+        customPersonas = CustomPersonaRepository(database.customPersonaDao())
+        travelProfile = TravelProfileRepository(app, database.mapsHistoryDao())
         googleMapsAuth = GoogleMapsAuth(app)
         driveTimelineFetcher = GoogleDriveTimelineFetcher()
         googleSignInBridge = GoogleSignInBridge()
@@ -105,8 +111,13 @@ object AppContainer {
         tripGeocoder = TripGeocoder(app)
         tripRouteFetcher = TripRouteFetcher()
         val deviceLocation = DeviceLocationProvider(app)
-        explore = ExploreRepository(app, trips, aiSettingsRepository)
-        nearbyExplore = NearbyExploreRepository(app, deviceLocation, aiSettingsRepository)
+        explore = ExploreRepository(app, database.exploreCacheDao(), trips, aiSettingsRepository)
+        nearbyExplore = NearbyExploreRepository(
+            app,
+            database.exploreCacheDao(),
+            deviceLocation,
+            aiSettingsRepository
+        )
         recommendations = RecommendationEngine(trips)
         alarms = TripAlarms(app, trips)
         travelApiSettings = TravelApiSettingsRepository(app)

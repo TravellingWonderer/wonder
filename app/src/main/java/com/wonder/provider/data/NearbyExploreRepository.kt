@@ -2,6 +2,8 @@ package com.wonder.provider.data
 
 import android.content.Context
 import com.wonder.provider.ai.AiSettingsRepository
+import com.wonder.provider.data.db.ExploreCacheDao
+import com.wonder.provider.data.db.ExploreFeedEntity
 import com.wonder.provider.data.maps.DeviceLocationProvider
 import com.wonder.provider.model.GeoCoordinate
 import com.wonder.provider.model.ExploreFeed
@@ -27,6 +29,7 @@ enum class NearbyLocationStatus {
 
 class NearbyExploreRepository(
     context: Context,
+    private val cacheDao: ExploreCacheDao,
     private val locationProvider: DeviceLocationProvider,
     private val aiSettings: AiSettingsRepository
 ) {
@@ -116,7 +119,7 @@ class NearbyExploreRepository(
         }
     }
 
-    private fun publishGenericNearby(force: Boolean) {
+    private suspend fun publishGenericNearby(force: Boolean) {
         val today = LocalDate.now()
         val cacheKey = "nearby_generic"
         val cached = loadCached(cacheKey, today)
@@ -131,11 +134,25 @@ class NearbyExploreRepository(
         persist(cacheKey, today, feed)
     }
 
-    private fun loadCached(key: String, date: LocalDate): ExploreFeed? =
-        prefs.getString(feedKey(key, date), null)?.let { ExploreFeedCodec.decode(it) }
+    private suspend fun loadCached(key: String, date: LocalDate): ExploreFeed? {
+        val cacheKey = feedKey(key, date)
+        cacheDao.feed(cacheKey)?.payloadJson?.let { return ExploreFeedCodec.decode(it) }
+        val legacy = prefs.getString(cacheKey, null) ?: return null
+        val feed = ExploreFeedCodec.decode(legacy) ?: return null
+        persist(key, date, feed)
+        prefs.edit().remove(cacheKey).apply()
+        return feed
+    }
 
-    private fun persist(key: String, date: LocalDate, feed: ExploreFeed) {
-        prefs.edit().putString(feedKey(key, date), ExploreFeedCodec.encode(feed)).apply()
+    private suspend fun persist(key: String, date: LocalDate, feed: ExploreFeed) {
+        cacheDao.upsert(
+            ExploreFeedEntity(
+                cacheKey = feedKey(key, date),
+                destination = feed.destination,
+                payloadJson = ExploreFeedCodec.encode(feed),
+                storedAtEpochMillis = System.currentTimeMillis()
+            )
+        )
     }
 
     private fun feedKey(key: String, date: LocalDate) = "nearby_feed_${key}_${date}"

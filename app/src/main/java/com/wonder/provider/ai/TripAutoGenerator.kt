@@ -1,6 +1,5 @@
 package com.wonder.provider.ai
 
-import com.wonder.provider.data.CityCatalog
 import com.wonder.provider.data.DestinationInference
 import com.wonder.provider.data.TripRepository
 import com.wonder.provider.data.maps.CityCoordinates
@@ -58,14 +57,26 @@ class TripAutoGenerator(
             tripSnapshot.interests.ifEmpty { setOf(TourInterest.LOCAL, TourInterest.FOOD) }
         }
 
-        val resolvedCity = place.trim().takeIf { it.isNotBlank() }
-            ?: tripSnapshot.destination.takeUnless {
-                it.equals(TripRepository.DEFAULT_DESTINATION, ignoreCase = true)
+        val titleForPlace = tripTitle.ifBlank { tripSnapshot.title }
+        val inferred = listOfNotNull(
+            place.trim().takeIf { DestinationInference.isGrounded(it) },
+            tripSnapshot.destination.takeIf { DestinationInference.isGrounded(it) },
+            DestinationInference.fromTitle(titleForPlace),
+            DestinationInference.fromText(notes),
+            parsed.city?.takeIf { DestinationInference.isGrounded(it) }
+        ).firstOrNull()
+        val resolvedCity = inferred
+            ?: DestinationInference.geocodeCandidate(titleForPlace, notes)?.let { geocoder.verifySettlement(it) }
+
+        if (resolvedCity == null) {
+            if (TripRepository.hasDecidedDestination(tripSnapshot.destination) &&
+                !DestinationInference.isGrounded(tripSnapshot.destination)
+            ) {
+                trips.updateTripDestinationDirect(tripId, TripRepository.DEFAULT_DESTINATION)
             }
-            ?: DestinationInference.fromTitle(tripTitle.ifBlank { tripSnapshot.title })
-            ?: DestinationInference.fromText(notes)
-            ?: parsed.city
-            ?: CityCatalog.knownCities().random()
+            onProgress(5, "Trip saved. Add a real destination when you know where you're going.")
+            return@withContext
+        }
 
         trips.updateTripDestinationDirect(tripId, resolvedCity)
 

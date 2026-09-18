@@ -2,6 +2,8 @@ package com.wonder.provider.data
 
 import android.content.Context
 import com.wonder.provider.ai.VibesParser
+import com.wonder.provider.data.db.AppSettingsDao
+import com.wonder.provider.data.db.AppSettingsEntity
 import com.wonder.provider.data.db.TripDao
 import com.wonder.provider.data.db.TripRecordMapper
 import com.wonder.provider.data.db.WonderDatabase
@@ -29,8 +31,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.time.LocalDate
@@ -42,11 +45,17 @@ import java.util.Locale
  * Trip data backed by Room on the device. One trip is active at a time; past trips archive
  * automatically once their end date has passed.
  */
-class TripRepository(context: Context, private val scope: CoroutineScope) {
+class TripRepository(
+    context: Context,
+    database: WonderDatabase,
+    private val scope: CoroutineScope
+) {
 
     private val appContext = context.applicationContext
-    private val dao: TripDao = WonderDatabase.get(appContext).tripDao()
-    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val dao: TripDao = database.tripDao()
+    private val settingsDao: AppSettingsDao = database.appSettingsDao()
+    private val legacyPrefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val prepared = CompletableDeferred<Unit>()
 
     private val _trip = MutableStateFlow(SampleTrip.trip)
     val trip: StateFlow<Trip> = _trip.asStateFlow()
@@ -71,6 +80,7 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
 
     private var modeWasChosen = false
     private var activeEntityArchiveStatus = TripArchiveStatus.PLANNED
+    @Volatile private var cachedActiveTripId: String? = null
 
     /** Set when a trip is freshly created; consumed once for a welcome-only opener. */
     @Volatile
@@ -81,29 +91,65 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
     private var quietWelcomePending = false
 
     init {
-        runBlocking { bootstrap() }
         scope.launch {
-            dao.observeTrips().collect { entities ->
-                val activeId = activeTripId().orEmpty()
-                _catalog.value = entities.map { TripRecordMapper.toSummary(it, activeId) }
+            prepared.await()
+            combine(dao.observeTrips(), settingsDao.observe()) { entities, settings ->
+                val activeId = settings?.activeTripId.orEmpty()
+                cachedActiveTripId = settings?.activeTripId
+                entities.map { TripRecordMapper.toSummary(it, activeId) }
+            }.collect { summaries ->
+                _catalog.value = summaries
             }
         }
     }
 
-    private suspend fun bootstrap() {
-        withContext(Dispatchers.IO) {
-            if (dao.tripCount() == 0 && !prefs.getBoolean(KEY_USER_CLEARED_TRIPS, false)) {
-                seedSampleTrip()
-            }
-            dao.archivePastTrips(LocalDate.now())
-            val activeId = activeTripId() ?: dao.tripsByStatus(TripArchiveStatus.PLANNED)
-                .firstOrNull()?.id
-                ?: return@withContext
-            if (activeTripId() == null) {
-                prefs.edit().putString(KEY_ACTIVE_TRIP, activeId).apply()
-            }
-            loadTrip(activeId, notify = false)
+    suspend fun prepare() {
+        try {
+            withContext(Dispatchers.IO) { bootstrap() }
+            prepared.complete(Unit)
+        } catch (error: Throwable) {
+            prepared.completeExceptionally(error)
+            throw error
         }
+    }
+
+    private suspend fun bootstrap() {
+        migrateLegacyPreferences()
+        val settings = settingsDao.settings() ?: AppSettingsEntity().also { settingsDao.upsert(it) }
+        if (dao.tripCount() == 0 && !settings.userClearedTrips) {
+            seedSampleTrip()
+        }
+        dao.archivePastTrips(LocalDate.now())
+        val activeId = cachedActiveTripId
+            ?: dao.tripsByStatus(TripArchiveStatus.PLANNED).firstOrNull()?.id
+            ?: return
+        if (cachedActiveTripId == null) {
+            persistActiveTripId(activeId)
+        }
+        loadTrip(activeId, notify = false)
+    }
+
+    private suspend fun migrateLegacyPreferences() {
+        val existing = settingsDao.settings() ?: AppSettingsEntity().also { settingsDao.upsert(it) }
+        val legacyActive = legacyPrefs.getString(KEY_ACTIVE_TRIP, null)
+        val legacyCleared = legacyPrefs.getBoolean(KEY_USER_CLEARED_TRIPS, false)
+        val migrated = existing.copy(
+            activeTripId = existing.activeTripId ?: legacyActive,
+            userClearedTrips = existing.userClearedTrips || legacyCleared
+        )
+        if (migrated != existing) {
+            settingsDao.upsert(migrated)
+        }
+        cachedActiveTripId = settingsDao.settings()?.activeTripId
+        if (legacyPrefs.all.isNotEmpty()) {
+            legacyPrefs.edit().clear().apply()
+        }
+    }
+
+    private suspend fun persistActiveTripId(tripId: String?) {
+        cachedActiveTripId = tripId
+        val current = settingsDao.settings() ?: AppSettingsEntity()
+        settingsDao.upsert(current.copy(activeTripId = tripId))
     }
 
     private suspend fun seedSampleTrip() {
@@ -114,13 +160,17 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
             mode = naturalModeFor(trip),
             modeWasManual = false
         )
-        dao.upsertTrip(entity)
-        SampleTrip.items.forEach { dao.upsertItem(TripRecordMapper.toItemEntity(it, trip.id)) }
-        SampleTrip.expenses.forEach { dao.upsertExpense(TripRecordMapper.toExpenseEntity(it, trip.id)) }
-        prefs.edit().putString(KEY_ACTIVE_TRIP, trip.id).apply()
+        dao.insertFullTrip(
+            trip = entity,
+            travellers = TripRecordMapper.toTravellerEntities(trip),
+            interests = TripRecordMapper.toInterestEntities(trip),
+            items = SampleTrip.items.map { TripRecordMapper.toItemEntity(it, trip.id) },
+            expenses = SampleTrip.expenses.map { TripRecordMapper.toExpenseEntity(it, trip.id) }
+        )
+        persistActiveTripId(trip.id)
     }
 
-    fun activeTripId(): String? = prefs.getString(KEY_ACTIVE_TRIP, null)
+    fun activeTripId(): String? = cachedActiveTripId
 
     fun hasActiveTrip(): Boolean = activeTripId() != null
 
@@ -154,7 +204,7 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
             dao.archivePastTrips(LocalDate.now())
             val entity = dao.tripById(tripId) ?: return@withContext
             if (entity.archiveStatus == TripArchiveStatus.ARCHIVED) return@withContext
-            prefs.edit().putString(KEY_ACTIVE_TRIP, tripId).apply()
+            persistActiveTripId(tripId)
             loadTrip(tripId, notify = true)
         }
     }
@@ -164,10 +214,10 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
     }
 
     suspend fun loadTripSnapshot(tripId: String): TripOverviewSnapshot? = withContext(Dispatchers.IO) {
-        val entity = dao.tripById(tripId) ?: return@withContext null
+        val details = dao.tripWithDetails(tripId) ?: return@withContext null
         TripOverviewSnapshot(
-            trip = TripRecordMapper.toTrip(entity),
-            items = dao.itemsForTrip(tripId).map(TripRecordMapper::toItem).sortedWith(itemOrder),
+            trip = TripRecordMapper.toTrip(details),
+            items = details.items.map(TripRecordMapper::toItem).sortedWith(itemOrder),
             isActive = activeTripId() == tripId
         )
     }
@@ -192,12 +242,13 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         val next = dao.tripsByStatus(TripArchiveStatus.PLANNED).firstOrNull()
             ?: dao.tripsByStatus(TripArchiveStatus.ARCHIVED).firstOrNull()
         if (next != null) {
-            prefs.edit().putString(KEY_ACTIVE_TRIP, next.id).apply()
+            persistActiveTripId(next.id)
             loadTrip(next.id, notify = true)
             return
         }
-        prefs.edit().remove(KEY_ACTIVE_TRIP).apply()
-        prefs.edit().putBoolean(KEY_USER_CLEARED_TRIPS, true).apply()
+        val current = settingsDao.settings() ?: AppSettingsEntity()
+        settingsDao.upsert(current.copy(activeTripId = null, userClearedTrips = true))
+        cachedActiveTripId = null
         _items.value = emptyList()
         _expenses.value = emptyList()
         _mode.value = TripMode.PLANNER
@@ -273,8 +324,12 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
             mode = naturalModeFor(trip),
             modeWasManual = false
         )
-        dao.upsertTrip(entity)
-        prefs.edit().putString(KEY_ACTIVE_TRIP, id).apply()
+        dao.persistTripGraph(
+            trip = entity,
+            travellers = TripRecordMapper.toTravellerEntities(trip),
+            interests = TripRecordMapper.toInterestEntities(trip)
+        )
+        persistActiveTripId(id)
         welcomeOnlyGreetingPending = true
         quietWelcomePending = quietWelcome
         loadTrip(id, notify = true)
@@ -282,14 +337,23 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
     }
 
     private suspend fun loadTrip(tripId: String, notify: Boolean) {
-        val entity = dao.tripById(tripId) ?: return
-        activeEntityArchiveStatus = entity.archiveStatus
-        modeWasChosen = entity.modeWasManual
-        _trip.value = TripRecordMapper.toTrip(entity)
-        _items.value = dao.itemsForTrip(tripId).map(TripRecordMapper::toItem).sortedWith(itemOrder)
-        _expenses.value = dao.expensesForTrip(tripId).map(TripRecordMapper::toExpense)
+        val details = dao.tripWithDetails(tripId) ?: return
+        activeEntityArchiveStatus = details.trip.archiveStatus
+        modeWasChosen = details.trip.modeWasManual
+        val loaded = TripRecordMapper.toTrip(details)
+        val destination = if (DestinationInference.shouldClearInferredDestination(loaded.destination, loaded.title)) {
+            TripRepository.DEFAULT_DESTINATION
+        } else {
+            loaded.destination
+        }
+        if (destination != loaded.destination) {
+            dao.upsertTrip(details.trip.copy(destination = destination))
+        }
+        _trip.value = loaded.copy(destination = destination)
+        _items.value = details.items.map(TripRecordMapper::toItem).sortedWith(itemOrder)
+        _expenses.value = details.expenses.map(TripRecordMapper::toExpense)
             .sortedByDescending { it.date }
-        _mode.value = if (entity.modeWasManual) entity.mode else naturalMode()
+        _mode.value = if (details.trip.modeWasManual) details.trip.mode else naturalMode()
         val destinationFilled = backfillDestinationIfNeeded()
         if (notify || destinationFilled) _activeTripSwitched.tryEmit(Unit)
     }
@@ -316,13 +380,16 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
 
     private suspend fun persistActiveTripState() {
         val trip = _trip.value
-        val entity = TripRecordMapper.toEntity(
-            trip = trip,
-            archiveStatus = activeEntityArchiveStatus,
-            mode = _mode.value,
-            modeWasManual = modeWasChosen
+        dao.persistTripGraph(
+            trip = TripRecordMapper.toEntity(
+                trip = trip,
+                archiveStatus = activeEntityArchiveStatus,
+                mode = _mode.value,
+                modeWasManual = modeWasChosen
+            ),
+            travellers = TripRecordMapper.toTravellerEntities(trip),
+            interests = TripRecordMapper.toInterestEntities(trip)
         )
-        dao.updateTrip(entity)
     }
 
     private suspend fun persistTripMeta() {

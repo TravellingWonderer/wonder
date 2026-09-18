@@ -34,6 +34,8 @@ You are a travel discovery editor. Return ONLY valid JSON, no markdown, matching
   "localTakes": [{"id":"...","place":"...","category":"Restaurant","opinion":"...","residentName":"...","residentDetail":"lives in Alfama"}]
 }
 Provide 4 tripIdeas, 4 foodFavorites, 3 localGuides, 4 smallTrips, 4 localTakes. Be specific to the city. Sound like a local, not a brochure. This is for someone planning a future trip — inspire them with fresh picks they have not seen before.
+Only use real, well-known places that exist in that city. If the destination is not a real city or country, return empty arrays for every list instead of inventing a place.
+The trip title is a nickname and must never be used as a city or venue name.
 """
 
     private const val AI_SYSTEM_LIVE = """
@@ -46,13 +48,16 @@ You are a travel concierge for someone currently ON their trip. Return ONLY vali
   "localTakes": [{"id":"...","place":"...","category":"Restaurant","opinion":"...","residentName":"...","residentDetail":"lives nearby"}]
 }
 Provide 4 tripIdeas (same-day or next-day side quests from their base — NOT generic vacation plans), 4 foodFavorites (where to eat today near their plans), 3 localGuides (bookable today or tomorrow), 4 smallTrips (fill gaps in today's schedule — afternoon/evening), 4 localTakes (timely tips for this week). Reference their itinerary when provided. Sound practical and immediate.
+Only use real places in the stated destination. If the destination is not a real city, return empty arrays. Never turn the trip title into a city or venue.
 """
 
     suspend fun generate(
         context: ExploreGenerationContext,
         chatProvider: AiChatProvider?
     ): ExploreFeed {
-        if (chatProvider != null) {
+        if (chatProvider != null &&
+            (context.feedKind == ExploreFeedKind.NEARBY || DestinationInference.isGrounded(context.destination))
+        ) {
             runCatching {
                 withTimeoutOrNull(AI_GENERATION_TIMEOUT_MS) {
                     val system = if (context.feedKind == ExploreFeedKind.LIVE_TRIP) AI_SYSTEM_LIVE else AI_SYSTEM_DISCOVERY
@@ -72,7 +77,11 @@ Provide 4 tripIdeas (same-day or next-day side quests from their base — NOT ge
     }
 
     private fun ExploreGenerationContext.userPrompt(): String = buildString {
-        append("Destination: $destination.")
+        if (!DestinationInference.isGrounded(destination)) {
+            append("Destination is not decided. Do not invent a city or any specific places. Return empty arrays.")
+            return@buildString
+        }
+        append("Destination: $destination (a real place — never substitute the trip title).")
         append(" Interests: ${interests.joinToString { it.label }}.")
         if (feedKind == ExploreFeedKind.LIVE_TRIP) {
             append(" Trip: \"$tripTitle\".")
@@ -97,6 +106,9 @@ Provide 4 tripIdeas (same-day or next-day side quests from their base — NOT ge
         interests: Set<TourInterest>,
         today: LocalDate = LocalDate.now()
     ): ExploreFeed {
+        if (!DestinationInference.isGrounded(destination) && !CityCatalog.isKnownPlace(destination)) {
+            return emptyFeed(destination, today, ExploreFeedKind.DISCOVERY)
+        }
         val city = CityCatalog.resolveCity(destination)
         val base = when {
             city.lowercase().contains("lisbon") -> lisbonFeed(destination, today, ExploreFeedKind.DISCOVERY)
@@ -171,6 +183,9 @@ Provide 4 tripIdeas (same-day or next-day side quests from their base — NOT ge
     }
 
     private fun generateLiveLocal(context: ExploreGenerationContext): ExploreFeed {
+        if (!DestinationInference.isGrounded(context.destination) && !CityCatalog.isKnownPlace(context.destination)) {
+            return emptyFeed(context.destination, context.today, ExploreFeedKind.LIVE_TRIP)
+        }
         val city = CityCatalog.resolveCity(context.destination)
         val discovery = when {
             city.lowercase().contains("lisbon") ->
@@ -441,6 +456,23 @@ Provide 4 tripIdeas (same-day or next-day side quests from their base — NOT ge
                 )
             ) + genericFeed(destination, "Paris", today, ExploreFeedKind.DISCOVERY).tripIdeas.take(2)
         )
+
+    private fun emptyFeed(
+        destination: String,
+        today: LocalDate,
+        kind: ExploreFeedKind
+    ) = ExploreFeed(
+        destination = destination,
+        gatheredAtEpochMillis = System.currentTimeMillis(),
+        sourceLabel = "Wonder",
+        contentDate = today.toString(),
+        feedKind = kind,
+        tripIdeas = emptyList(),
+        foodFavorites = emptyList(),
+        localGuides = emptyList(),
+        smallTrips = emptyList(),
+        localTakes = emptyList()
+    )
 
     private fun genericFeed(
         destination: String,

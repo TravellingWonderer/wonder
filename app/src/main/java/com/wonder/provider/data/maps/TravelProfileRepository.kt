@@ -2,7 +2,6 @@ package com.wonder.provider.data.maps
 
 import android.content.Context
 import android.net.Uri
-import com.wonder.provider.data.db.WonderDatabase
 import com.wonder.provider.model.TravelProfileSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -11,10 +10,12 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-class TravelProfileRepository(context: Context) {
+class TravelProfileRepository(
+    context: Context,
+    private val dao: MapsHistoryDao
+) {
 
     private val appContext = context.applicationContext
-    private val dao = WonderDatabase.get(appContext).mapsHistoryDao()
 
     @Volatile
     private var cachedAiContext: String = ""
