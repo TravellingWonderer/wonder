@@ -721,12 +721,16 @@ class LocalConversationEngine(private val trips: TripRepository) {
 
     private fun searchFlights(text: String): AgentReply {
         val trip = trips.trip.value
+        val origin = detectAirportHint(text, listOf("from", "leaving", "departing"))
+        val destination = detectAirportHint(text, listOf("to", "flying to", "into"))
+            ?: trip.destination
+        val place = destination.substringBefore(",").ifBlank { trip.destination }
         return AgentReply(
-            say = "Searching live fares for ${trip.destination.substringBefore(",")} — results in a moment.",
+            say = "Searching live fares toward $place — results in a moment.",
             intents = listOf(
                 CardIntent.SearchFlights(
-                    origin = null,
-                    destination = trip.destination,
+                    origin = origin,
+                    destination = destination,
                     departDate = trip.startDate,
                     returnDate = trip.endDate,
                     adults = trip.partySize
@@ -734,6 +738,21 @@ class LocalConversationEngine(private val trips: TripRepository) {
             ),
             suggestions = chips("How's our budget?", "What's still unbooked?", "Show me the whole trip")
         )
+    }
+
+    private fun detectAirportHint(text: String, prepositions: List<String>): String? {
+        for (prep in prepositions) {
+            val match = Regex(
+                """\b${Regex.escape(prep)}\s+([A-Za-z][\p{L}'-]{1,}(?:\s+[A-Za-z][\p{L}'-]{1,})?)""",
+                RegexOption.IGNORE_CASE
+            ).find(text)
+            val candidate = match?.groupValues?.get(1)?.trim().orEmpty()
+            if (candidate.length >= 3 && !candidate.equals("the", ignoreCase = true)) {
+                return candidate
+            }
+        }
+        Regex("""\b([A-Z]{3})\b""").find(text)?.groupValues?.get(1)?.let { return it }
+        return null
     }
 
     // endregion

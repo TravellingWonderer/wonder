@@ -504,14 +504,16 @@ private fun TravelSearchSettingsSection() {
     val context = LocalContext.current
     val travelSettings = AppContainer.travelApiSettings
     val savedToken by travelSettings.duffelToken.collectAsState(initial = travelSettings.getDuffelToken())
+    val savedHome by travelSettings.homeAirport.collectAsState(initial = travelSettings.getHomeAirport())
     var tokenInput by remember(savedToken) { mutableStateOf(savedToken) }
+    var homeAirportInput by remember(savedHome) { mutableStateOf(savedHome) }
     var showToken by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionLabel("Live flight prices")
+        SectionLabel("Live flights & stays")
         Text(
-            text = "Google Flights has no public API. Wonder searches live fares through Duffel — free test tokens at duffel.com. Booking.com requires a separate affiliate partnership for hotels.",
+            text = "Wonder uses Duffel for live fares and approximate stay prices. Create a test token in the Duffel dashboard (Developers → Access tokens) — it starts with duffel_test_. Paste it here, or set duffel.token in local.properties.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -533,23 +535,39 @@ private fun TravelSearchSettingsSection() {
             shape = RoundedCornerShape(16.dp),
             singleLine = true
         )
+        OutlinedTextField(
+            value = homeAirportInput,
+            onValueChange = {
+                homeAirportInput = it.uppercase().take(3)
+                saved = false
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Home airport (IATA)") },
+            placeholder = { Text("LHR") },
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = {
                     travelSettings.saveDuffelToken(tokenInput.trim())
+                    travelSettings.saveHomeAirport(homeAirportInput.trim().ifBlank { "LHR" })
                     saved = true
                 },
                 shape = RoundedCornerShape(14.dp)
             ) {
-                Text("Save flight API")
+                Text("Save travel API")
             }
-            TextButton(onClick = { openUrl(context, "https://duffel.com/docs/guides/getting-started-with-flights") }) {
-                Text("Duffel docs")
+            TextButton(onClick = { openUrl(context, "https://app.duffel.com") }) {
+                Text("Open dashboard")
+            }
+            TextButton(onClick = { openUrl(context, "https://duffel.com/docs/guides/getting-started-with-the-dashboard") }) {
+                Text("Token guide")
             }
         }
         if (saved && tokenInput.isNotBlank()) {
             Text(
-                text = "Live flight search is ready — ask Wonder for flight prices in chat.",
+                text = "Ready — new vibed trips pull live flights, and chat can search fares too.",
                 style = MaterialTheme.typography.labelMedium,
                 color = WonderColors.current.positive
             )

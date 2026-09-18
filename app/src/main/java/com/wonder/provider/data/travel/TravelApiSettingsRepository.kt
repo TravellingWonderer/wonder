@@ -21,6 +21,9 @@ class TravelApiSettingsRepository(context: Context) {
     private val _duffelToken = MutableStateFlow(loadToken())
     val duffelToken: StateFlow<String> = _duffelToken.asStateFlow()
 
+    private val _homeAirport = MutableStateFlow(loadHomeAirport())
+    val homeAirport: StateFlow<String> = _homeAirport.asStateFlow()
+
     fun getDuffelToken(): String =
         _duffelToken.value.ifBlank { BuildConfig.DUFFEL_ACCESS_TOKEN.trim() }
 
@@ -33,10 +36,22 @@ class TravelApiSettingsRepository(context: Context) {
 
     fun clearDuffelToken() = saveDuffelToken("")
 
+    fun getHomeAirport(): String =
+        _homeAirport.value.ifBlank { "LHR" }.uppercase()
+
+    fun saveHomeAirport(code: String) {
+        val cleaned = code.trim().uppercase().take(3)
+        prefs.edit().putString(KEY_HOME_AIRPORT, cleaned).apply()
+        _homeAirport.value = cleaned
+    }
+
     private fun loadToken(): String = prefs.getString(KEY_DUFFEL, "").orEmpty()
+
+    private fun loadHomeAirport(): String = prefs.getString(KEY_HOME_AIRPORT, "").orEmpty()
 
     private companion object {
         const val PREFS_NAME = "wonder_travel_api"
         const val KEY_DUFFEL = "duffel_token"
+        const val KEY_HOME_AIRPORT = "home_airport"
     }
 }

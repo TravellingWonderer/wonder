@@ -142,6 +142,14 @@ fun NewTripScreen(
                     blankStart = plan.blankStart || plan.effectiveVibes.isBlank(),
                     datesConfirmed = plan.datesConfirmed
                 )
+                if (!plan.blankStart && plan.effectiveVibes.isNotBlank() && plan.datesConfirmed) {
+                    runCatching {
+                        AppContainer.tripAutoGenerator.generateFromVibes(
+                            vibes = plan.effectiveVibes,
+                            tripTitle = plan.title
+                        )
+                    }
+                }
                 onCreated()
             } finally {
                 creating = false

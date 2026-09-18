@@ -96,7 +96,6 @@ object AppContainer {
         aiTourService = AiTourService(aiSettingsRepository)
         tripVibeGenerator = TripVibeGenerator(aiSettingsRepository)
         trips = TripRepository(app, appScope)
-        tripAutoGenerator = TripAutoGenerator(trips, aiTourService)
         customPersonas = CustomPersonaRepository(app)
         travelProfile = TravelProfileRepository(app)
         googleMapsAuth = GoogleMapsAuth(app)
@@ -112,6 +111,7 @@ object AppContainer {
         alarms = TripAlarms(app, trips)
         travelApiSettings = TravelApiSettingsRepository(app)
         travelSearch = TravelSearchRepository(travelApiSettings)
+        tripAutoGenerator = TripAutoGenerator(trips, aiTourService, travelSearch, tripGeocoder)
 
         wonderAgent = WonderAgent(
             settingsRepository = aiSettingsRepository,

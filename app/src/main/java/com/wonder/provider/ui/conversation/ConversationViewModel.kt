@@ -509,6 +509,26 @@ class ConversationViewModel(
                 travellerIds = trip.travellers.map { it.id }.toSet()
             )
         )
+        if (offer.isRoundTrip) {
+            val retOrigin = offer.returnOrigin ?: offer.destination
+            val retDest = offer.returnDestination ?: offer.origin
+            trips.upsertItem(
+                ItineraryItem(
+                    id = trips.newItemId(),
+                    date = trip.endDate.takeIf { it.isAfter(date) } ?: date,
+                    title = "Flight $retOrigin → $retDest",
+                    kind = ItemKind.FLIGHT,
+                    startTime = null,
+                    durationMinutes = 180,
+                    location = "$retOrigin → $retDest",
+                    notes = "Return · fare included in outbound · live Duffel quote",
+                    estimatedCost = 0.0,
+                    costIsPerPerson = false,
+                    status = ItemStatus.PLANNED,
+                    travellerIds = trip.travellers.map { it.id }.toSet()
+                )
+            )
+        }
         alarms.refresh()
         refreshTripState()
         val budget = trips.budget()

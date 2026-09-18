@@ -1,10 +1,19 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val duffelToken = (project.findProperty("duffel.token") as? String)
+    ?.takeIf { it.isNotBlank() }
+    ?: localProperties.getProperty("duffel.token", "")
 
 android {
     namespace = "com.wonder.provider"
@@ -43,7 +52,7 @@ android {
         buildConfigField(
             "String",
             "DUFFEL_ACCESS_TOKEN",
-            "\"${project.findProperty("duffel.token") ?: ""}\""
+            "\"${duffelToken.replace("\"", "\\\"")}\""
         )
     }
 

@@ -24,7 +24,7 @@ class DuffelFlightClient(private val accessToken: String) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
         .build()
 
     suspend fun search(query: FlightSearchQuery): List<FlightOfferSummary> = withContext(Dispatchers.IO) {
@@ -39,40 +39,49 @@ class DuffelFlightClient(private val accessToken: String) {
         }
 
         val body = JSONObject()
-            .put("data", JSONObject()
-                .put("slices", slices)
-                .put("passengers", passengers)
-                .put("cabin_class", "economy")
+            .put(
+                "data",
+                JSONObject()
+                    .put("slices", slices)
+                    .put("passengers", passengers)
+                    .put("cabin_class", "economy")
             )
             .toString()
 
+        // return_offers=true (default) embeds offers in the create response — prefer that over polling.
         val createRequest = Request.Builder()
-            .url("$BASE/air/offer_requests")
+            .url("$BASE/air/offer_requests?return_offers=true&supplier_timeout=20000")
             .header("Authorization", "Bearer $accessToken")
             .header("Duffel-Version", API_VERSION)
             .header("Accept", "application/json")
+            .header("Accept-Encoding", "gzip")
             .post(body.toRequestBody(JSON))
             .build()
 
-        val offerRequestId = client.newCall(createRequest).execute().use { response ->
+        client.newCall(createRequest).execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw TravelSearchException(parseDuffelError(raw, response.code))
             }
-            JSONObject(raw).getJSONObject("data").getString("id")
+            val data = JSONObject(raw).getJSONObject("data")
+            val embedded = data.optJSONArray("offers")
+            if (embedded != null && embedded.length() > 0) {
+                return@withContext parseOffers(embedded)
+            }
+            val offerRequestId = data.getString("id")
+            fetchOffers(offerRequestId)
         }
-
-        fetchOffers(offerRequestId)
     }
 
     private fun fetchOffers(offerRequestId: String): List<FlightOfferSummary> {
-        repeat(8) { attempt ->
-            val url = "$BASE/air/offers?offer_request_id=$offerRequestId&limit=8"
+        repeat(6) { attempt ->
+            val url = "$BASE/air/offers?offer_request_id=$offerRequestId&sort=total_amount&limit=10"
             val request = Request.Builder()
                 .url(url)
                 .header("Authorization", "Bearer $accessToken")
                 .header("Duffel-Version", API_VERSION)
                 .header("Accept", "application/json")
+                .header("Accept-Encoding", "gzip")
                 .get()
                 .build()
 
@@ -81,29 +90,52 @@ class DuffelFlightClient(private val accessToken: String) {
                 if (!response.isSuccessful) {
                     throw TravelSearchException(parseDuffelError(raw, response.code))
                 }
-                val json = JSONObject(raw)
-                val offers = json.optJSONArray("data") ?: JSONArray()
+                val offers = JSONObject(raw).optJSONArray("data") ?: JSONArray()
                 if (offers.length() > 0) {
-                    return (0 until offers.length()).mapNotNull { index ->
-                        parseOffer(offers.optJSONObject(index))
-                    }.sortedBy { it.price }
+                    return parseOffers(offers)
                 }
             }
 
-            if (attempt < 7) Thread.sleep(800)
+            if (attempt < 5) Thread.sleep(700)
         }
         return emptyList()
     }
 
+    private fun parseOffers(offers: JSONArray): List<FlightOfferSummary> =
+        (0 until offers.length()).mapNotNull { index ->
+            parseOffer(offers.optJSONObject(index))
+        }.sortedBy { it.price }
+
     private fun parseOffer(offer: JSONObject?): FlightOfferSummary? {
         if (offer == null) return null
         val price = offer.optString("total_amount").toDoubleOrNull() ?: return null
-        val currency = offer.optString("total_currency", "EUR")
+        val currency = CurrencyCodes.display(offer.optString("total_currency", "EUR"))
         val slices = offer.optJSONArray("slices") ?: return null
         if (slices.length() == 0) return null
 
-        val firstSlice = slices.getJSONObject(0)
-        val segments = firstSlice.optJSONArray("segments") ?: return null
+        val outbound = parseSlice(slices.getJSONObject(0)) ?: return null
+        val inbound = if (slices.length() > 1) parseSlice(slices.getJSONObject(1)) else null
+
+        return FlightOfferSummary(
+            id = offer.optString("id"),
+            airline = outbound.airline,
+            price = price,
+            currency = currency,
+            origin = outbound.origin,
+            destination = outbound.destination,
+            departLabel = outbound.departLabel,
+            arriveLabel = outbound.arriveLabel,
+            durationLabel = outbound.durationLabel,
+            stops = outbound.stops,
+            returnOrigin = inbound?.origin,
+            returnDestination = inbound?.destination,
+            returnDepartLabel = inbound?.departLabel,
+            returnArriveLabel = inbound?.arriveLabel
+        )
+    }
+
+    private fun parseSlice(slice: JSONObject): SliceSummary? {
+        val segments = slice.optJSONArray("segments") ?: return null
         if (segments.length() == 0) return null
 
         val firstSeg = segments.getJSONObject(0)
@@ -120,25 +152,24 @@ class DuffelFlightClient(private val accessToken: String) {
         val destination = lastSeg.optJSONObject("destination")?.optString("iata_code").orEmpty()
         val departAt = parseDateTime(firstSeg.optString("departing_at"))
         val arriveAt = parseDateTime(lastSeg.optString("arriving_at"))
+        val durationLabel = formatIsoDuration(slice.optString("duration"))
+            .ifBlank { formatDuration(departAt, arriveAt) }
 
-        return FlightOfferSummary(
-            id = offer.optString("id"),
+        return SliceSummary(
             airline = airline,
-            price = price,
-            currency = currency,
             origin = origin,
             destination = destination,
             departLabel = formatTime(departAt),
             arriveLabel = formatTime(arriveAt),
-            durationLabel = formatDuration(departAt, arriveAt),
+            durationLabel = durationLabel,
             stops = stops
         )
     }
 
     private fun slice(origin: String, destination: String, date: java.time.LocalDate): JSONObject =
         JSONObject()
-            .put("origin", origin)
-            .put("destination", destination)
+            .put("origin", origin.uppercase(Locale.ENGLISH))
+            .put("destination", destination.uppercase(Locale.ENGLISH))
             .put("departure_date", date.toString())
 
     private fun parseDateTime(value: String): LocalDateTime? =
@@ -150,6 +181,18 @@ class DuffelFlightClient(private val accessToken: String) {
     private fun formatDuration(start: LocalDateTime?, end: LocalDateTime?): String {
         if (start == null || end == null) return ""
         val minutes = Duration.between(start, end).toMinutes().coerceAtLeast(0)
+        return formatMinutes(minutes)
+    }
+
+    private fun formatIsoDuration(raw: String): String {
+        if (raw.isBlank()) return ""
+        return runCatching {
+            val duration = Duration.parse(raw)
+            formatMinutes(duration.toMinutes().coerceAtLeast(0))
+        }.getOrDefault("")
+    }
+
+    private fun formatMinutes(minutes: Long): String {
         val hours = minutes / 60
         val mins = minutes % 60
         return when {
@@ -167,6 +210,16 @@ class DuffelFlightClient(private val accessToken: String) {
         }.getOrNull()?.takeIf { it.isNotBlank() }
         return message ?: "Flight search failed (HTTP $code)."
     }
+
+    private data class SliceSummary(
+        val airline: String,
+        val origin: String,
+        val destination: String,
+        val departLabel: String,
+        val arriveLabel: String,
+        val durationLabel: String,
+        val stops: Int
+    )
 
     private companion object {
         const val BASE = "https://api.duffel.com"

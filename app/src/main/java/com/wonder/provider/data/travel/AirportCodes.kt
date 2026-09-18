@@ -27,17 +27,38 @@ internal object AirportCodes {
         "athens" to "ATH",
         "istanbul" to "IST",
         "new york" to "JFK",
+        "nyc" to "JFK",
         "los angeles" to "LAX",
         "san francisco" to "SFO",
         "chicago" to "ORD",
         "miami" to "MIA",
         "toronto" to "YYZ",
+        "vancouver" to "YVR",
+        "montreal" to "YUL",
         "dubai" to "DXB",
         "singapore" to "SIN",
         "tokyo" to "NRT",
         "bangkok" to "BKK",
         "sydney" to "SYD",
-        "melbourne" to "MEL"
+        "melbourne" to "MEL",
+        "hong kong" to "HKG",
+        "seoul" to "ICN",
+        "milan" to "MXP",
+        "venice" to "VCE",
+        "florence" to "FLR",
+        "naples" to "NAP",
+        "seville" to "SVQ",
+        "valencia" to "VLC",
+        "nice" to "NCE",
+        "lyon" to "LYS",
+        "marseille" to "MRS",
+        "edinburgh" to "EDI",
+        "manchester" to "MAN",
+        "budapest" to "BUD",
+        "warsaw" to "WAW",
+        "krakow" to "KRK",
+        "lisboa" to "LIS",
+        "sintra" to "LIS"
     )
 
     /** Resolve a city name or raw IATA code to a 3-letter airport code. */
@@ -47,6 +68,10 @@ internal object AirportCodes {
             return trimmed.uppercase()
         }
         val city = trimmed.lowercase().substringBefore(",").trim()
-        return byCity.entries.firstOrNull { (key, _) -> city.contains(key) || key.contains(city) }?.value
+        if (city.isBlank()) return null
+        byCity[city]?.let { return it }
+        return byCity.entries.firstOrNull { (key, _) ->
+            city.contains(key) || key.contains(city)
+        }?.value
     }
 }

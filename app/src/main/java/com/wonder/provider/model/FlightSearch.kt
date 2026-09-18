@@ -22,8 +22,14 @@ data class FlightOfferSummary(
     val arriveLabel: String,
     val durationLabel: String,
     val stops: Int,
-    val isLivePrice: Boolean = true
-)
+    val isLivePrice: Boolean = true,
+    val returnOrigin: String? = null,
+    val returnDestination: String? = null,
+    val returnDepartLabel: String? = null,
+    val returnArriveLabel: String? = null
+) {
+    val isRoundTrip: Boolean get() = !returnOrigin.isNullOrBlank()
+}
 
 data class FlightSearchResult(
     val query: FlightSearchQuery,
