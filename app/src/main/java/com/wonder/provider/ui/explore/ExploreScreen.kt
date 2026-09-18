@@ -55,7 +55,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.wonder.provider.AppContainer
 import com.wonder.provider.data.NearbyLocationStatus
 import com.wonder.provider.data.TripRepository
@@ -67,12 +70,19 @@ import com.wonder.provider.model.LocalGuide
 import com.wonder.provider.model.LocalTake
 import com.wonder.provider.model.SmallTripIdea
 import com.wonder.provider.model.TripArchiveStatus
+import com.wonder.provider.model.ItemKind
+import com.wonder.provider.model.ItemStatus
+import com.wonder.provider.model.ItineraryItem
+import com.wonder.provider.model.Recommendation
 import com.wonder.provider.model.TripIdea
 import com.wonder.provider.model.TripSummary
+import com.wonder.provider.ui.conversation.AddToTripSheet
+import com.wonder.provider.ui.conversation.AddToTripSheetState
 import com.wonder.provider.ui.conversation.AmbientBackdrop
 import com.wonder.provider.ui.conversation.AmbientOrb
 import com.wonder.provider.ui.theme.WonderColors
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -99,9 +109,10 @@ fun ExploreScreen(
     val planned = catalog.filter { it.archiveStatus == TripArchiveStatus.PLANNED }
     val archived = catalog.filter { it.archiveStatus == TripArchiveStatus.ARCHIVED }
     var showArchived by remember { mutableStateOf(false) }
-    var creatingTrip by remember { mutableStateOf(false) }
     var tripToDelete by remember { mutableStateOf<TripSummary?>(null) }
     var directionsPick by remember { mutableStateOf<ExplorePlacePick?>(null) }
+    var addToTripSheet by remember { mutableStateOf<AddToTripSheetState?>(null) }
+    var pendingTripIdea by remember { mutableStateOf<TripIdea?>(null) }
     val hasActiveTrip = catalog.any { it.isActive }
     val nearbyExplore = AppContainer.nearbyExplore
     val nearbyFeed by nearbyExplore.feed.collectAsStateWithLifecycle()
@@ -152,8 +163,12 @@ fun ExploreScreen(
         }
     }
 
-    LaunchedEffect(hasActiveTrip, trip.id, browsingNearby) {
-        if (hasActiveTrip && !browsingNearby) explore.ensureFeed(force = false)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(hasActiveTrip, trip.id, browsingNearby, lifecycleOwner) {
+        // Only generate while Explore is on-screen — opening a trip must not kick AI.
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (hasActiveTrip && !browsingNearby) explore.ensureFeed(force = false)
+        }
     }
 
     LaunchedEffect(isNearbyMode) {
@@ -162,16 +177,36 @@ fun ExploreScreen(
         }
     }
 
-    fun startTripFromIdea(idea: TripIdea) {
-        if (creatingTrip) return
-        creatingTrip = true
-        scope.launch {
-            try {
-                trips.createTripFromIdea(idea)
-            } finally {
-                creatingTrip = false
-            }
-        }
+    fun openAddIdeaToTrip(idea: TripIdea) {
+        pendingTripIdea = idea
+        addToTripSheet = AddToTripSheetState(
+            pick = idea.toRecommendation(),
+            currency = trip.currency,
+            tripDates = trip.dates.filter { date -> !date.isBefore(LocalDate.now()) }
+                .ifEmpty { trip.dates }
+        )
+    }
+
+    fun addIdeaToTrip(pick: Recommendation, date: LocalDate) {
+        val idea = pendingTripIdea
+        trips.upsertItem(
+            ItineraryItem(
+                id = trips.newItemId(),
+                date = date,
+                title = pick.title,
+                kind = pick.kind,
+                durationMinutes = pick.durationMinutes,
+                location = idea?.destination?.takeIf { it.isNotBlank() }
+                    ?: trip.destination.substringBefore(","),
+                notes = idea?.summary ?: pick.tip,
+                estimatedCost = pick.estimatedCost,
+                costIsPerPerson = true,
+                status = ItemStatus.IDEA,
+                travellerIds = trip.travellers.map { it.id }.toSet()
+            )
+        )
+        pendingTripIdea = null
+        addToTripSheet = null
     }
 
     fun deleteTrip(summary: TripSummary) {
@@ -184,6 +219,17 @@ fun ExploreScreen(
         ExploreDirectionsSheet(
             pick = pick,
             onDismiss = { directionsPick = null }
+        )
+    }
+
+    addToTripSheet?.let { sheet ->
+        AddToTripSheet(
+            state = sheet,
+            onDismiss = {
+                addToTripSheet = null
+                pendingTripIdea = null
+            },
+            onAdd = { pick, date -> addIdeaToTrip(pick, date) }
         )
     }
 
@@ -288,7 +334,7 @@ fun ExploreScreen(
                     }
                 }
 
-                if (planned.isNotEmpty() || creatingTrip || !hasActiveTrip || isNearbyMode) {
+                if (planned.isNotEmpty() || !hasActiveTrip || isNearbyMode) {
                     item(key = "your-trips-label") {
                         SectionHeader(
                             title = "Your trips",
@@ -327,7 +373,7 @@ fun ExploreScreen(
                                 )
                             }
                             NewTripChip(
-                                loading = creatingTrip,
+                                loading = false,
                                 onClick = onOpenNewTrip
                             )
                         }
@@ -374,7 +420,7 @@ fun ExploreScreen(
                         content = content,
                         areaContext = areaContext,
                         nearbyMode = isNearbyMode,
-                        onTripIdeaClick = if (isNearbyMode) null else ({ startTripFromIdea(it) }),
+                        onTripIdeaClick = if (isNearbyMode) null else ({ openAddIdeaToTrip(it) }),
                         onDirections = { directionsPick = it }
                     )
                 }
@@ -419,6 +465,17 @@ fun ExploreScreen(
         }
     }
 
+private fun TripIdea.toRecommendation(): Recommendation = Recommendation(
+    id = id,
+    title = title,
+    why = vibe,
+    emoji = emoji,
+    kind = ItemKind.ACTIVITY,
+    estimatedCost = 0.0,
+    durationMinutes = (durationDays.coerceAtLeast(1) * 180).coerceAtMost(480),
+    tip = summary
+)
+
 private fun ExploreFeed.gatheredLabel(): String {
     val date = Instant.ofEpochMilli(gatheredAtEpochMillis)
         .atZone(ZoneId.systemDefault())
@@ -445,7 +502,7 @@ private fun LazyListScope.ExploreFeedSections(
             subtitle = if (nearbyMode) {
                 "Picked for where you are right now"
             } else {
-                "Tap an idea to start a new trip from it"
+                "Tap an idea to add it to this trip"
             }
         )
     }

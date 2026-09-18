@@ -42,7 +42,8 @@ class LocalAiProvider : AiTourProvider {
                     currency = "€",
                     timeSlot = timeSlots.getOrElse(index) { "Flexible" },
                     emoji = poi.emoji,
-                    tip = poi.tip
+                    tip = poi.tip,
+                    location = poi.location.ifBlank { "${poi.name}, ${cityName.split(",").first().trim()}" }
                 )
             }
 

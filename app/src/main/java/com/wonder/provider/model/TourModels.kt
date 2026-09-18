@@ -50,7 +50,8 @@ data class TourStop(
     val currency: String,
     val timeSlot: String,
     val emoji: String,
-    val tip: String
+    val tip: String,
+    val location: String = ""
 )
 
 data class CuratedTour(

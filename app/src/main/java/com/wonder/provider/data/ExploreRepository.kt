@@ -44,8 +44,24 @@ class ExploreRepository(
             ensureFeed(force = false)
         }
         scope.launch {
-            trips.activeTripSwitched.collect { ensureFeed(force = false) }
+            // Switching trips must stay instant — only swap in today's cache.
+            // AI generation runs when Explore is visible via ensureFeed().
+            trips.activeTripSwitched.collect { showCachedFeedForActiveTrip() }
         }
+    }
+
+    /** Instant: show today's cached feed for the active trip, or clear. No AI. */
+    private fun showCachedFeedForActiveTrip() {
+        val tripId = trips.activeTripId() ?: run {
+            _feed.value = null
+            return
+        }
+        val trip = trips.trip.value
+        if (!TripRepository.hasDecidedDestination(trip.destination)) {
+            _feed.value = null
+            return
+        }
+        _feed.value = loadCachedForToday(tripId)
     }
 
     /** Loads today's cached feed; generates once per day when missing or stale. */

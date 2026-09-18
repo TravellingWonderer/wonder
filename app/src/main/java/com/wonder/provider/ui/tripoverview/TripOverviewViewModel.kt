@@ -46,6 +46,17 @@ class TripOverviewViewModel(
 
     init {
         load()
+        viewModelScope.launch {
+            trips.activeTripSwitched.collect {
+                val active = trips.activeTripId() == tripId
+                if (_state.value.trip != null) {
+                    // Already painted from DB — only sync active flag, don't re-geocode.
+                    _state.update { it.copy(isActive = active) }
+                } else {
+                    load()
+                }
+            }
+        }
     }
 
     fun load() {
@@ -57,30 +68,38 @@ class TripOverviewViewModel(
             }
             val center = CityCoordinates.forDestination(snapshot.trip.destination)
                 ?: GeoCoordinate(48.0, 2.0)
+
+            // Paint immediately from Room + local city offsets — no network.
+            val quickLegs = snapshot.items.mapIndexed { index, item ->
+                TimelineLeg(
+                    item = item,
+                    coordinate = CityCoordinates.offsetFromCenter(center, index)
+                )
+            }
+            _state.update {
+                it.copy(
+                    loading = false,
+                    trip = snapshot.trip,
+                    legs = quickLegs,
+                    markers = markersFor(quickLegs),
+                    routeSegments = emptyList(),
+                    mapCenter = center,
+                    isActive = snapshot.isActive
+                )
+            }
+
+            // Refine map positions and routes in the background.
             val legs = snapshot.items.mapIndexed { index, item ->
                 val coordinate = geocoder.resolve(item.location, snapshot.trip.destination)
                     ?: CityCoordinates.offsetFromCenter(center, index)
                 TimelineLeg(item = item, coordinate = coordinate)
             }
-            val markers = legs.mapNotNull { leg ->
-                leg.coordinate?.let { coord ->
-                    MapLegMarker(
-                        legId = leg.item.id,
-                        title = leg.item.title,
-                        coordinate = coord
-                    )
-                }
-            }
             val routeSegments = routeFetcher.buildSegments(legs)
             _state.update {
                 it.copy(
-                    loading = false,
-                    trip = snapshot.trip,
                     legs = legs,
-                    markers = markers,
-                    routeSegments = routeSegments,
-                    mapCenter = center,
-                    isActive = snapshot.isActive
+                    markers = markersFor(legs),
+                    routeSegments = routeSegments
                 )
             }
         }
@@ -99,6 +118,17 @@ class TripOverviewViewModel(
         _state.update { it.copy(isActive = true) }
         onDone()
     }
+
+    private fun markersFor(legs: List<TimelineLeg>): List<MapLegMarker> =
+        legs.mapNotNull { leg ->
+            leg.coordinate?.let { coord ->
+                MapLegMarker(
+                    legId = leg.item.id,
+                    title = leg.item.title,
+                    coordinate = coord
+                )
+            }
+        }
 }
 
 class TripOverviewViewModelFactory(

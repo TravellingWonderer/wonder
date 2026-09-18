@@ -102,8 +102,8 @@ fun WonderApp() {
             ) {
                 NewTripScreen(
                     onBack = { navController.popBackStack() },
-                    onCreated = {
-                        navController.navigate(Screen.Conversation.route) {
+                    onCreated = { tripId ->
+                        navController.navigate(Screen.TripOverview.build(tripId)) {
                             popUpTo(Screen.Explore.route) { inclusive = false }
                             launchSingleTop = true
                         }

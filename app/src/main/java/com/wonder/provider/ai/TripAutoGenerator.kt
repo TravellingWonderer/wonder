@@ -1,6 +1,7 @@
 package com.wonder.provider.ai
 
 import com.wonder.provider.data.CityCatalog
+import com.wonder.provider.data.DestinationInference
 import com.wonder.provider.data.TripRepository
 import com.wonder.provider.data.maps.CityCoordinates
 import com.wonder.provider.data.maps.TripGeocoder
@@ -16,6 +17,8 @@ import com.wonder.provider.model.TourBuildRequest
 import com.wonder.provider.model.TourBudget
 import com.wonder.provider.model.TourDuration
 import com.wonder.provider.model.TourInterest
+import com.wonder.provider.model.TourStop
+import com.wonder.provider.model.Trip
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -39,61 +42,74 @@ class TripAutoGenerator(
 ) {
 
     suspend fun generateFromVibes(
-        vibes: String,
+        targetTripId: String? = null,
+        vibes: String = "",
         tripTitle: String = "",
-        place: String = ""
+        place: String = "",
+        onProgress: suspend (step: Int, message: String) -> Unit = { _, _ -> }
     ) = withContext(Dispatchers.IO) {
-        val notes = vibes.trim().ifBlank { tripTitle.trim() }
-        if (notes.isBlank()) return@withContext
-        if (!trips.trip.value.datesConfirmed) return@withContext
+        val tripId = targetTripId ?: trips.trip.value.id
+        val tripSnapshot = trips.loadTripSnapshot(tripId)?.trip ?: trips.trip.value
+        val notes = vibes.trim().ifBlank { tripTitle.trim().ifBlank { tripSnapshot.title.trim() } }
 
-        val parsed = VibesParser.parse(notes)
-        val trip = trips.trip.value
+        onProgress(0, "Analyzing travel vibes & destination profile...")
+        val parsed = if (notes.isNotBlank()) VibesParser.parse(notes) else VibesParser.parse("")
         val interests = parsed.interests.ifEmpty {
-            trip.interests.ifEmpty { setOf(TourInterest.LOCAL, TourInterest.FOOD) }
+            tripSnapshot.interests.ifEmpty { setOf(TourInterest.LOCAL, TourInterest.FOOD) }
         }
 
         val resolvedCity = place.trim().takeIf { it.isNotBlank() }
-            ?: trip.destination.takeUnless {
+            ?: tripSnapshot.destination.takeUnless {
                 it.equals(TripRepository.DEFAULT_DESTINATION, ignoreCase = true)
             }
+            ?: DestinationInference.fromTitle(tripTitle.ifBlank { tripSnapshot.title })
+            ?: DestinationInference.fromText(notes)
             ?: parsed.city
             ?: CityCatalog.knownCities().random()
 
-        val everyone = trips.trip.value.travellers.map { it.id }.toSet()
+        trips.updateTripDestinationDirect(tripId, resolvedCity)
+
+        val everyone = tripSnapshot.travellers.map { it.id }.toSet().ifEmpty { setOf("t1") }
         val adults = everyone.size.coerceAtLeast(1)
 
-        coroutineScope {
-            val travelJob = async {
-                addTravelBones(
-                    city = resolvedCity,
-                    budget = parsed.budget,
-                    adults = adults,
-                    everyone = everyone
-                )
-            }
-            val daysJob = async {
-                fillDayPlans(
-                    notes = notes,
-                    city = resolvedCity,
-                    interests = interests,
-                    pace = parsed.pace,
-                    budget = parsed.budget,
-                    everyone = everyone
-                )
-            }
-            travelJob.await()
-            daysJob.await()
-        }
+        onProgress(1, "Searching live flights & scouting curated base stay...")
+        val stayInfo = addTravelBones(
+            targetTripId = tripId,
+            trip = tripSnapshot,
+            city = resolvedCity,
+            budget = parsed.budget,
+            adults = adults,
+            everyone = everyone
+        )
+
+        onProgress(2, "Curating daily activities & hidden local gems...")
+        onProgress(3, "Connecting public & private transit to/from ${stayInfo.first}...")
+        fillDayPlans(
+            targetTripId = tripId,
+            trip = tripSnapshot,
+            notes = notes,
+            city = resolvedCity,
+            interests = interests,
+            pace = parsed.pace,
+            budget = parsed.budget,
+            everyone = everyone,
+            stayName = stayInfo.first,
+            stayLocation = stayInfo.second
+        )
+
+        onProgress(4, "Persisting curated trip & transit routes to offline database...")
+        kotlinx.coroutines.delay(400)
+        onProgress(5, "Curated trip ready! Opening your itinerary...")
     }
 
     private suspend fun addTravelBones(
+        targetTripId: String,
+        trip: Trip,
         city: String,
         budget: TourBudget,
         adults: Int,
         everyone: Set<String>
-    ) {
-        val trip = trips.trip.value
+    ): Pair<String, String> {
         val flightQuery = travelSearch.defaultQuery(
             trip = trip,
             originHint = null,
@@ -131,7 +147,7 @@ class TripAutoGenerator(
             null
         }
 
-        coroutineScope {
+        return coroutineScope {
             val flightDeferred = async {
                 flightQuery?.let { travelSearch.searchFlights(it) }
             }
@@ -142,7 +158,7 @@ class TripAutoGenerator(
             val flightResult = flightDeferred.await()
             val bestFlight = flightResult?.offers?.firstOrNull()
             if (bestFlight != null) {
-                upsertFlights(bestFlight, trip.startDate, trip.endDate, everyone)
+                upsertFlights(targetTripId, bestFlight, trip.startDate, trip.endDate, everyone)
             }
 
             val stayResult = stayDeferred.await()
@@ -156,11 +172,14 @@ class TripAutoGenerator(
                     budget = budget,
                     currency = trip.currency
                 )
-            upsertStay(bestStay, trip.startDate, everyone)
+            upsertStay(targetTripId, bestStay, trip.startDate, everyone)
+            val stayLoc = bestStay.neighbourhood.ifBlank { "${bestStay.name}, ${city.substringBefore(',')}" }
+            Pair(bestStay.name, stayLoc)
         }
     }
 
-    private fun upsertFlights(
+    private suspend fun upsertFlights(
+        targetTripId: String,
         offer: FlightOfferSummary,
         start: LocalDate,
         end: LocalDate,
@@ -176,7 +195,7 @@ class TripAutoGenerator(
             append(if (offer.stops == 0) " · direct" else " · ${offer.stops} stop${if (offer.stops == 1) "" else "s"}")
             append(if (offer.isLivePrice) " · live Duffel quote" else "")
         }
-        trips.upsertItem(
+        trips.upsertItemDirect(
             ItineraryItem(
                 id = trips.newItemId(),
                 date = start,
@@ -190,13 +209,14 @@ class TripAutoGenerator(
                 costIsPerPerson = false,
                 status = ItemStatus.PLANNED,
                 travellerIds = everyone
-            )
+            ),
+            targetTripId
         )
 
         if (offer.isRoundTrip && end.isAfter(start)) {
             val retOrigin = offer.returnOrigin ?: offer.destination
             val retDest = offer.returnDestination ?: offer.origin
-            trips.upsertItem(
+            trips.upsertItemDirect(
                 ItineraryItem(
                     id = trips.newItemId(),
                     date = end,
@@ -214,12 +234,18 @@ class TripAutoGenerator(
                     costIsPerPerson = false,
                     status = ItemStatus.PLANNED,
                     travellerIds = everyone
-                )
+                ),
+                targetTripId
             )
         }
     }
 
-    private fun upsertStay(stay: StayOfferSummary, checkIn: LocalDate, everyone: Set<String>) {
+    private suspend fun upsertStay(
+        targetTripId: String,
+        stay: StayOfferSummary,
+        checkIn: LocalDate,
+        everyone: Set<String>
+    ) {
         val nightly = String.format(Locale.ENGLISH, "%.0f", stay.nightlyApprox)
         val notes = buildString {
             append("~")
@@ -232,7 +258,7 @@ class TripAutoGenerator(
             append(if (stay.isLivePrice) " · live Duffel Stays" else " · approximate")
             stay.rating?.let { append(" · rated ${"%.1f".format(Locale.ENGLISH, it)}") }
         }
-        trips.upsertItem(
+        trips.upsertItemDirect(
             ItineraryItem(
                 id = trips.newItemId(),
                 date = checkIn,
@@ -246,22 +272,26 @@ class TripAutoGenerator(
                 costIsPerPerson = false,
                 status = ItemStatus.PLANNED,
                 travellerIds = everyone
-            )
+            ),
+            targetTripId
         )
     }
 
     private suspend fun fillDayPlans(
+        targetTripId: String,
+        trip: Trip,
         notes: String,
         city: String,
         interests: Set<TourInterest>,
         pace: com.wonder.provider.model.TourPace,
         budget: TourBudget,
-        everyone: Set<String>
+        everyone: Set<String>,
+        stayName: String,
+        stayLocation: String
     ) {
-        val trip = trips.trip.value
         val slotFormat = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
         // Keep arrival / departure lighter — fill middle days fully, edges with a shorter ask.
-        trip.dates.forEachIndexed { index, date ->
+        for ((index, date) in trip.dates.withIndex()) {
             val isEdge = index == 0 || index == trip.dates.lastIndex
             val request = TourBuildRequest(
                 city = city,
@@ -276,31 +306,109 @@ class TripAutoGenerator(
                 .getOrElse { LocalAiProvider().curateTour(request) }
 
             var fallbackTime = if (isEdge && index == 0) LocalTime.of(14, 0) else LocalTime.of(9, 30)
-            val stops = if (isEdge) tour.stops.take(2) else tour.stops
-            stops.forEachIndexed { stopIndex, stop ->
+            val rawStops = if (isEdge) tour.stops.take(2) else tour.stops
+            if (rawStops.isEmpty()) continue
+
+            data class ScheduledStop(
+                val stop: TourStop,
+                val start: LocalTime,
+                val location: String
+            )
+
+            val scheduled = rawStops.mapIndexed { _, stop ->
                 val parsedTime = runCatching {
                     LocalTime.parse(stop.timeSlot.uppercase(Locale.ENGLISH), slotFormat)
                 }.getOrNull()
                 val start = parsedTime ?: fallbackTime
-                fallbackTime = start.plusMinutes((stop.durationMinutes + 30).toLong())
+                fallbackTime = start.plusMinutes((stop.durationMinutes + 35).toLong())
+                val stopLoc = stop.location.ifBlank { "${stop.name}, ${city.substringBefore(',')}" }
+                ScheduledStop(stop, start, stopLoc)
+            }
 
-                trips.upsertItem(
+            // 1. Morning transit: from Main Stay to First Activity
+            val first = scheduled.first()
+            val morningTransitStart = first.start.minusMinutes(25)
+            trips.upsertItemDirect(
+                ItineraryItem(
+                    id = "${trips.newItemId()}-transit-depart-$index",
+                    date = date,
+                    title = "Transit to ${first.stop.name}",
+                    kind = ItemKind.TRANSPORT,
+                    startTime = morningTransitStart,
+                    durationMinutes = 20,
+                    location = "$stayLocation → ${first.location}",
+                    notes = "Public transit: Metro / Bus ~20m (~2.50 ${trip.currency}) · Private: Taxi / Rideshare ~10m (~8.00 ${trip.currency}) from $stayName",
+                    estimatedCost = 2.50,
+                    costIsPerPerson = true,
+                    status = ItemStatus.PLANNED,
+                    travellerIds = everyone
+                ),
+                targetTripId
+            )
+
+            // 2. Add each activity, and intermediate transit between consecutive activities
+            scheduled.forEachIndexed { i, current ->
+                trips.upsertItemDirect(
                     ItineraryItem(
-                        id = "${trips.newItemId()}-$stopIndex",
+                        id = "${trips.newItemId()}-act-$index-$i",
                         date = date,
-                        title = stop.name,
-                        kind = stop.category.toItemKind(),
-                        startTime = start,
-                        durationMinutes = stop.durationMinutes,
-                        location = city.substringBefore(","),
-                        notes = stop.tip,
-                        estimatedCost = stop.estimatedCost.toDouble(),
+                        title = current.stop.name,
+                        kind = current.stop.category.toItemKind(),
+                        startTime = current.start,
+                        durationMinutes = current.stop.durationMinutes,
+                        location = current.location,
+                        notes = current.stop.tip,
+                        estimatedCost = current.stop.estimatedCost.toDouble(),
                         costIsPerPerson = true,
                         status = ItemStatus.PLANNED,
                         travellerIds = everyone
-                    )
+                    ),
+                    targetTripId
                 )
+
+                val next = scheduled.getOrNull(i + 1)
+                if (next != null) {
+                    val transitStartTime = current.start.plusMinutes(current.stop.durationMinutes.toLong())
+                    trips.upsertItemDirect(
+                        ItineraryItem(
+                            id = "${trips.newItemId()}-transit-hop-$index-$i",
+                            date = date,
+                            title = "Transit: ${current.stop.name} → ${next.stop.name}",
+                            kind = ItemKind.TRANSPORT,
+                            startTime = transitStartTime,
+                            durationMinutes = 15,
+                            location = "${current.location} → ${next.location}",
+                            notes = "Public transit: Walk or Tram / Metro ~15m (~2.00 ${trip.currency}) · Private: Taxi / Rideshare ~8m (~6.00 ${trip.currency})",
+                            estimatedCost = 2.00,
+                            costIsPerPerson = true,
+                            status = ItemStatus.PLANNED,
+                            travellerIds = everyone
+                        ),
+                        targetTripId
+                    )
+                }
             }
+
+            // 3. Evening transit: from Last Activity back to Main Stay
+            val last = scheduled.last()
+            val eveningTransitStart = last.start.plusMinutes(last.stop.durationMinutes.toLong())
+            trips.upsertItemDirect(
+                ItineraryItem(
+                    id = "${trips.newItemId()}-transit-return-$index",
+                    date = date,
+                    title = "Transit back to $stayName",
+                    kind = ItemKind.TRANSPORT,
+                    startTime = eveningTransitStart,
+                    durationMinutes = 20,
+                    location = "${last.location} → $stayLocation",
+                    notes = "Return to base stay · Public transit: Metro / Bus ~20m (~2.50 ${trip.currency}) · Private: Taxi / Uber ~12m (~10.00 ${trip.currency})",
+                    estimatedCost = 2.50,
+                    costIsPerPerson = true,
+                    status = ItemStatus.PLANNED,
+                    travellerIds = everyone
+                ),
+                targetTripId
+            )
         }
     }
 

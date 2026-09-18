@@ -20,8 +20,8 @@ class WonderHostedAiProvider(
     override val sourceLabel = "Wonder AI"
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
         .build()
 
     override suspend fun curateTour(request: TourBuildRequest): CuratedTour =

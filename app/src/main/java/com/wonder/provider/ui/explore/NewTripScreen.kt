@@ -1,5 +1,12 @@
 package com.wonder.provider.ui.explore
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,8 +31,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.FlightTakeoff
+import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -52,9 +62,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wonder.provider.AppContainer
@@ -78,7 +90,7 @@ private val CHIP_DATE = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
 @Composable
 fun NewTripScreen(
     onBack: () -> Unit,
-    onCreated: () -> Unit
+    onCreated: (String) -> Unit
 ) {
     val palette = WonderColors.current
     val trips = AppContainer.trips
@@ -91,6 +103,8 @@ fun NewTripScreen(
     var generatingVibes by remember { mutableStateOf(false) }
     var vibeDraftToken by remember { mutableStateOf(0) }
     var creating by remember { mutableStateOf(false) }
+    var creationStep by remember { mutableStateOf(0) }
+    var creationMessage by remember { mutableStateOf("Preparing your journey...") }
     var showRangeCalendar by remember { mutableStateOf(false) }
     var showAnchorCalendar by remember { mutableStateOf(false) }
 
@@ -130,27 +144,43 @@ fun NewTripScreen(
             blueprint.copy(blankStart = false)
         }
         creating = true
+        creationStep = 0
+        creationMessage = "Analyzing vibes & setting destination..."
         scope.launch {
             try {
                 val (start, end) = plan.dateRange
-                trips.createBlankTrip(
+                val newTripId = trips.createBlankTrip(
                     title = plan.title,
                     destination = TripRepository.DEFAULT_DESTINATION,
                     startDate = start,
                     endDate = end,
                     vibes = plan.effectiveVibes,
-                    blankStart = plan.blankStart || plan.effectiveVibes.isBlank(),
+                    blankStart = plan.blankStart,
                     datesConfirmed = plan.datesConfirmed
                 )
-                if (!plan.blankStart && plan.effectiveVibes.isNotBlank() && plan.datesConfirmed) {
+                if (!plan.blankStart) {
                     runCatching {
                         AppContainer.tripAutoGenerator.generateFromVibes(
+                            targetTripId = newTripId,
                             vibes = plan.effectiveVibes,
-                            tripTitle = plan.title
+                            tripTitle = plan.title,
+                            onProgress = { step, msg ->
+                                creationStep = step
+                                creationMessage = msg
+                            }
                         )
+                    }.onFailure { error ->
+                        android.util.Log.e("NewTripScreen", "Trip auto generation failed", error)
                     }
+                } else {
+                    creationStep = 4
+                    creationMessage = "Saving trip to offline database..."
+                    kotlinx.coroutines.delay(400)
+                    creationStep = 5
+                    creationMessage = "Trip initialized! Opening itinerary..."
                 }
-                onCreated()
+                kotlinx.coroutines.delay(500)
+                onCreated(newTripId)
             } finally {
                 creating = false
             }
@@ -372,6 +402,14 @@ fun NewTripScreen(
                     )
                 }
             }
+        }
+
+        if (creating) {
+            TripCreationProgressOverlay(
+                step = creationStep,
+                statusMessage = creationMessage,
+                tripTitle = blueprint.title
+            )
         }
     }
 }
@@ -900,3 +938,241 @@ private fun LocalDate.toUtcMillis(): Long =
 
 private fun Long.toLocalDate(): LocalDate =
     Instant.ofEpochMilli(this).atZone(ZoneOffset.UTC).toLocalDate()
+
+@Composable
+private fun TripCreationProgressOverlay(
+    step: Int,
+    statusMessage: String,
+    tripTitle: String
+) {
+    val palette = WonderColors.current
+    val transition = rememberInfiniteTransition(label = "creation-anim")
+    val spinAngle by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing)
+        ),
+        label = "spin"
+    )
+    val pulseScale by transition.animateFloat(
+        initialValue = 0.94f,
+        targetValue = 1.06f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse"
+    )
+    val glowAlpha by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow"
+    )
+
+    val stages = remember {
+        listOf(
+            "Analyzing vibes & destination profile",
+            "Searching live flights & scouting base stay",
+            "Curating daily activities & hidden gems",
+            "Linking public & private transit to/from stay",
+            "Persisting trip into secure offline database",
+            "Trip curated! Opening your itinerary"
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.78f))
+            .clickable(enabled = false) {},
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .clip(RoundedCornerShape(32.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                            MaterialTheme.colorScheme.surface
+                        )
+                    )
+                )
+                .border(
+                    width = 1.5.dp,
+                    brush = Brush.linearGradient(
+                        listOf(
+                            palette.aurora[0].copy(alpha = 0.6f * glowAlpha),
+                            palette.aurora[1].copy(alpha = 0.4f),
+                            Color.Transparent
+                        )
+                    ),
+                    shape = RoundedCornerShape(32.dp)
+                )
+                .padding(horizontal = 22.dp, vertical = 26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Orb / Database Pulse
+            Box(
+                modifier = Modifier.size(92.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // Spinning gradient ring
+                Box(
+                    modifier = Modifier
+                        .size(92.dp)
+                        .graphicsLayer {
+                            rotationZ = spinAngle
+                            scaleX = pulseScale
+                            scaleY = pulseScale
+                        }
+                        .border(
+                            width = 3.dp,
+                            brush = Brush.sweepGradient(
+                                listOf(
+                                    palette.aurora[0],
+                                    palette.aurora[1],
+                                    Color.Transparent,
+                                    palette.aurora[0]
+                                )
+                            ),
+                            shape = CircleShape
+                        )
+                )
+                // Center icon
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .clip(CircleShape)
+                        .background(Brush.linearGradient(palette.aurora)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (step >= 4) Icons.Rounded.Storage else Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            }
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "Curating ${tripTitle.ifBlank { "your trip" }}",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = statusMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.aurora[0],
+                    textAlign = TextAlign.Center,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // Steps Checklist
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(palette.cardTint)
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                stages.forEachIndexed { index, stageLabel ->
+                    val isDone = step > index
+                    val isCurrent = step == index
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (isDone) {
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(CircleShape)
+                                    .background(WonderColors.current.positive),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        } else if (isCurrent) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.5.dp,
+                                color = palette.aurora[0]
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = stageLabel,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = if (isCurrent || isDone) FontWeight.SemiBold else FontWeight.Normal,
+                            color = when {
+                                isDone -> MaterialTheme.colorScheme.onSurface
+                                isCurrent -> palette.aurora[0]
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Offline Database badge
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Storage,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = palette.aurora[0]
+                )
+                Text(
+                    text = "Room SQLite · Stored locally on device",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+

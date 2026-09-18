@@ -10,7 +10,8 @@ internal data class PointOfInterest(
     val cost: Int,
     val emoji: String,
     val tip: String,
-    val timePreference: Int // 0=morning, 1=afternoon, 2=evening
+    val timePreference: Int, // 0=morning, 1=afternoon, 2=evening
+    val location: String = ""
 )
 
 internal object CityCatalog {
@@ -109,16 +110,16 @@ internal object CityCatalog {
     }
 
     private fun lisbonPois() = listOf(
-        PointOfInterest("Alfama Morning Walk", "Wander Lisbon's oldest neighbourhood — fado echoes and azulejo tiles at every turn.", TourInterest.CULTURE, 90, 0, "🏘️", "Get lost on purpose — the best finds are off the main path.", 0),
-        PointOfInterest("Time Out Market Tasting", "Curated food hall with Portugal's best chefs under one roof.", TourInterest.FOOD, 75, 30, "🍷", "Share plates to try more vendors.", 1),
-        PointOfInterest("Belém Tower & Pastéis", "UNESCO landmark plus the original pastel de nata at Pastéis de Belém.", TourInterest.CULTURE, 90, 8, "🏰", "Queue moves fast — don't skip the cinnamon sugar.", 1),
-        PointOfInterest("LX Factory Creative Hub", "Industrial complex turned art, design shops, and rooftop bars.", TourInterest.ART, 75, 0, "🎨", "Sunday brunch market is unmissable.", 1),
-        PointOfInterest("Miradouro da Senhora do Monte", "Lisbon's highest viewpoint — 270° panorama over the Tagus.", TourInterest.NATURE, 45, 0, "🌅", "Bring a bottle of wine for sunset.", 2),
-        PointOfInterest("Sunset Kayak on the Tagus", "Paddle past the 25 de Abril bridge as the sky turns gold.", TourInterest.ADVENTURE, 150, 65, "🛶", "No experience needed — guides are excellent.", 2),
-        PointOfInterest("Bairro Alto Night Crawl", "Bar-hop through Lisbon's liveliest district.", TourInterest.NIGHTLIFE, 120, 40, "🌙", "Start at Park rooftop for views, end in a fado bar.", 2),
-        PointOfInterest("Feira da Ladra Flea Market", "Treasure hunt at Lisbon's legendary Tuesday/Saturday flea market.", TourInterest.SHOPPING, 90, 0, "🛍️", "Haggle politely — it's part of the fun.", 0),
-        PointOfInterest("Sintra Day Trip", "Fairytale palaces and misty forests just 40 minutes away.", TourInterest.NATURE, 300, 25, "🏔️", "Book Pena Palace tickets online to skip the line.", 0),
-        PointOfInterest("Hidden Tasca Dinner", "Family-run tavern serving bacalhau and vinho verde.", TourInterest.LOCAL, 90, 22, "💎", "No menu — the owner decides what's best today.", 2)
+        PointOfInterest("Alfama Morning Walk", "Wander Lisbon's oldest neighbourhood — fado echoes and azulejo tiles at every turn.", TourInterest.CULTURE, 90, 0, "🏘️", "Get lost on purpose — the best finds are off the main path.", 0, "Alfama, Lisbon"),
+        PointOfInterest("Time Out Market Tasting", "Curated food hall with Portugal's best chefs under one roof.", TourInterest.FOOD, 75, 30, "🍷", "Share plates to try more vendors.", 1, "Cais do Sodré, Lisbon"),
+        PointOfInterest("Belém Tower & Pastéis", "UNESCO landmark plus the original pastel de nata at Pastéis de Belém.", TourInterest.CULTURE, 90, 8, "🏰", "Queue moves fast — don't skip the cinnamon sugar.", 1, "Belém, Lisbon"),
+        PointOfInterest("LX Factory Creative Hub", "Industrial complex turned art, design shops, and rooftop bars.", TourInterest.ART, 75, 0, "🎨", "Sunday brunch market is unmissable.", 1, "Alcântara, Lisbon"),
+        PointOfInterest("Miradouro da Senhora do Monte", "Lisbon's highest viewpoint — 270° panorama over the Tagus.", TourInterest.NATURE, 45, 0, "🌅", "Bring a bottle of wine for sunset.", 2, "Graça, Lisbon"),
+        PointOfInterest("Sunset Kayak on the Tagus", "Paddle past the 25 de Abril bridge as the sky turns gold.", TourInterest.ADVENTURE, 150, 65, "🛶", "No experience needed — guides are excellent.", 2, "Doca de Santo Amaro, Lisbon"),
+        PointOfInterest("Bairro Alto Night Crawl", "Bar-hop through Lisbon's liveliest district.", TourInterest.NIGHTLIFE, 120, 40, "🌙", "Start at Park rooftop for views, end in a fado bar.", 2, "Bairro Alto, Lisbon"),
+        PointOfInterest("Feira da Ladra Flea Market", "Treasure hunt at Lisbon's legendary Tuesday/Saturday flea market.", TourInterest.SHOPPING, 90, 0, "🛍️", "Haggle politely — it's part of the fun.", 0, "Campo de Santa Clara, Lisbon"),
+        PointOfInterest("Sintra Day Trip", "Fairytale palaces and misty forests just 40 minutes away.", TourInterest.NATURE, 300, 25, "🏔️", "Book Pena Palace tickets online to skip the line.", 0, "Sintra, Portugal"),
+        PointOfInterest("Hidden Tasca Dinner", "Family-run tavern serving bacalhau and vinho verde.", TourInterest.LOCAL, 90, 22, "💎", "No menu — the owner decides what's best today.", 2, "Mouraria, Lisbon")
     )
 
     private fun parisPois() = listOf(

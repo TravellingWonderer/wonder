@@ -17,7 +17,6 @@ import com.wonder.provider.model.TourInterest
 import com.wonder.provider.model.Traveller
 import com.wonder.provider.model.Trip
 import com.wonder.provider.model.TripArchiveStatus
-import com.wonder.provider.model.TripIdea
 import com.wonder.provider.model.TripMode
 import com.wonder.provider.model.TripOverviewSnapshot
 import com.wonder.provider.model.TripSummary
@@ -205,20 +204,6 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
         _activeTripSwitched.tryEmit(Unit)
     }
 
-    suspend fun createTripFromIdea(idea: TripIdea): String = withContext(Dispatchers.IO) {
-        persistActiveTripState()
-        val start = LocalDate.now().plusWeeks(2)
-        val end = start.plusDays(idea.durationDays.toLong().coerceAtLeast(1) - 1)
-        createAndActivateTrip(
-            title = idea.title,
-            destination = idea.destination,
-            startDate = start,
-            endDate = end,
-            coverEmoji = idea.emoji,
-            interests = setOf(TourInterest.LOCAL, TourInterest.FOOD)
-        )
-    }
-
     suspend fun createBlankTrip(
         title: String,
         destination: String,
@@ -387,6 +372,31 @@ class TripRepository(context: Context, private val scope: CoroutineScope) {
             if (backfillDestinationIfNeeded()) {
                 _activeTripSwitched.tryEmit(Unit)
             }
+        }
+    }
+
+    suspend fun upsertItemDirect(item: ItineraryItem, tripId: String) = withContext(Dispatchers.IO) {
+        dao.upsertItem(TripRecordMapper.toItemEntity(item, tripId))
+        if (_trip.value.id == tripId) {
+            _items.update { current ->
+                val existing = current.indexOfFirst { it.id == item.id }
+                val next = if (existing >= 0) {
+                    current.toMutableList().apply { set(existing, item) }
+                } else {
+                    current + item
+                }
+                next.sortedWith(itemOrder)
+            }
+        }
+    }
+
+    suspend fun updateTripDestinationDirect(tripId: String, destination: String) = withContext(Dispatchers.IO) {
+        val entity = dao.tripById(tripId) ?: return@withContext
+        val updated = entity.copy(destination = destination)
+        dao.upsertTrip(updated)
+        if (_trip.value.id == tripId) {
+            _trip.value = _trip.value.copy(destination = destination)
+            _activeTripSwitched.tryEmit(Unit)
         }
     }
 
